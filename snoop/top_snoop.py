@@ -9,6 +9,7 @@ from yaml import parse
 from cpu_snoop import CPUSnoop
 from mem_snoop import MEMSnoop
 from network_snoop import NetworkSnoop
+from syscall_snoop import SyscallSnoop
 from utils import run_command
 import subprocess
 
@@ -20,6 +21,7 @@ class TOPSnoop():
         self.cpu_snoop = CPUSnoop()
         self.mem_snoop = MEMSnoop()
         self.network_snoop = NetworkSnoop()
+        self.syscall_snoop = SyscallSnoop()
         self.popens=[]
         self.parse_args()
     
@@ -48,9 +50,11 @@ class TOPSnoop():
         cpu_snoop_process = mp.Process(target=self.cpu_snoop.run, args=(self.interval, "cpu.csv", self.snoop_pid))
         mem_snoop_process = mp.Process(target=self.mem_snoop.run, args=(self.interval, "mem.csv", self.snoop_pid))
         net_snoop_process = mp.Process(target=self.network_snoop.run, args=(self.interval, "network.csv", self.snoop_pid))
+        syscall_snoop_process = mp.Process(target=self.syscall_snoop.run, args=("syscall.csv", self.snoop_pid))
         cpu_snoop_process.start()
         mem_snoop_process.start()
         net_snoop_process.start()
+        syscall_snoop_process.start()
 
 if __name__=="__main__":
     top_snoop = TOPSnoop()
