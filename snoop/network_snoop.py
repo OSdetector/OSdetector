@@ -5,7 +5,7 @@ from bcc.containers import filter_by_containers
 import argparse
 from socket import inet_ntop, AF_INET, AF_INET6
 from struct import pack
-from time import sleep, strftime
+from time import sleep, strftime, time
 from subprocess import call
 from collections import namedtuple, defaultdict
 from utils import run_command_get_pid
@@ -37,6 +37,17 @@ struct ipv6_key_t {
 };
 BPF_HASH(ipv6_send_bytes, struct ipv6_key_t);
 BPF_HASH(ipv6_recv_bytes, struct ipv6_key_t);
+
+struct udp_key_t {
+    u32 pid;
+    char name[TASK_COMM_LEN];
+    u32 saddr;
+    u32 daddr;
+    u16 lport;
+    u16 dport;
+};
+BPF_HASH(udp_send_bytes, struct udp_key_t);
+BPF_HASH(udp_recv_bytes, struct udp_key_t);
 
 int kprobe__tcp_sendmsg(struct pt_regs *ctx, struct sock *sk,
     struct msghdr *msg, size_t size)
@@ -85,7 +96,7 @@ int kprobe__tcp_sendmsg(struct pt_regs *ctx, struct sock *sk,
  * - misses tcp_read_sock() traffic
  * we'd much prefer tracepoints once they are available.
  */
-/*
+
 int kprobe__tcp_cleanup_rbuf(struct pt_regs *ctx, struct sock *sk, int copied)
 {
     if (container_should_be_filtered()) {
@@ -129,10 +140,66 @@ int kprobe__tcp_cleanup_rbuf(struct pt_regs *ctx, struct sock *sk, int copied)
 
     return 0;
 }
-*/
+
+int kprobe__udp_sendmsg(struct pt_regs *ctx, struct sock *sk,
+    struct msghdr *msg, size_t size)
+{
+    if (container_should_be_filtered()) {
+            return 0;
+        }
+
+    u32 pid = bpf_get_current_pid_tgid() >> 32;
+    FILTER_PID
+
+    u16 dport = 0, family = sk->__sk_common.skc_family;
+
+    FILTER_FAMILY
+    
+    struct udp_key_t udp_key = {.pid = pid};
+    bpf_get_current_comm(&udp_key.name, sizeof(udp_key.name));
+    udp_key.saddr = sk->__sk_common.skc_rcv_saddr;
+    udp_key.daddr = sk->__sk_common.skc_daddr;
+    udp_key.lport = sk->__sk_common.skc_num;
+    dport = sk->__sk_common.skc_dport;
+    udp_key.dport = ntohs(dport);
+    udp_send_bytes.increment(udp_key, size);
+
+    return 0;
+}
+
+int kprobe__udp_recvmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg, int len,
+		int noblock, int flags, int *addr_len)
+{
+    if (container_should_be_filtered()) {
+        return 0;
+    }
+
+    u32 pid = bpf_get_current_pid_tgid() >> 32;
+    FILTER_PID
+
+    u16 dport = 0, family = sk->__sk_common.skc_family;
+
+    FILTER_FAMILY
+
+    if(len < 0)
+        return -1;
+
+    struct udp_key_t udp_key = {.pid = pid};
+    bpf_get_current_comm(&udp_key.name, sizeof(udp_key.name));
+    udp_key.saddr = sk->__sk_common.skc_rcv_saddr;
+    udp_key.daddr = sk->__sk_common.skc_daddr;
+    udp_key.lport = sk->__sk_common.skc_num;
+    dport = sk->__sk_common.skc_dport;
+    udp_key.dport = ntohs(dport);
+    udp_recv_bytes.increment(udp_key, len);
+
+    return 0;
+}
+
 """
 
 TCPSessionKey = namedtuple('TCPSession', ['pid', 'name', 'laddr', 'lport', 'daddr', 'dport']) 
+UDPSessionKey = namedtuple('UDPSession', ['pid', 'name', 'laddr', 'lport', 'daddr', 'dport'])
 def get_ipv4_session_key(k):
     return TCPSessionKey(pid=k.pid,
                         name=k.name,
@@ -147,7 +214,15 @@ def get_ipv6_session_key(k):
                         laddr=inet_ntop(AF_INET6, k.saddr),
                         lport=k.lport,
                         daddr=inet_ntop(AF_INET6, k.daddr),
-                        dport=k.dport)  
+                        dport=k.dport) 
+
+def get_udp_session_key(k):
+    return UDPSessionKey(pid=k.pid,
+                name=k.name,
+                laddr=inet_ntop(AF_INET, pack("I", k.saddr)),
+                lport=k.lport,
+                daddr=inet_ntop(AF_INET, pack("I", k.daddr)),
+                dport=k.dport)   
 
 class NetworkSnoop():
     def __init__(self) -> None:
@@ -174,6 +249,8 @@ class NetworkSnoop():
         self.ipv4_recv_bytes = self.bpf["ipv4_recv_bytes"]
         self.ipv6_send_bytes = self.bpf["ipv6_send_bytes"]
         self.ipv6_recv_bytes = self.bpf["ipv6_recv_bytes"]
+        self.udp_send_bytes = self.bpf["udp_send_bytes"]
+        self.udp_recv_bytes = self.bpf["udp_recv_bytes"]
 
     def record(self):
         # IPv4: build dict of all seen keys
@@ -200,30 +277,79 @@ class NetworkSnoop():
             ipv6_throughput[key][1] = v.value
         self.ipv6_recv_bytes.clear()
         
+        # UDP: build dict for all seen keys
+        udp_throughput = defaultdict(lambda: [0, 0])
+        for k, v in self.udp_send_bytes.items():
+            key = get_udp_session_key(k)
+            udp_throughput[key][0] = v.value
+        self.udp_send_bytes.clear()
+
+        for k, v in self.udp_recv_bytes.items():
+            key = get_udp_session_key(k)
+            udp_throughput[key][1] = v.value
+        self.udp_recv_bytes.clear()
+
         # Output
+        time_ticks = time()
         for k, (send_bytes, recv_bytes) in sorted(ipv4_throughput.items(),
                                                 key=lambda kv: sum(kv[1]),
                                                 reverse=True):
-            self.output_file.write("%d, %.12s, %s, %s, %d, %d\n" % (k.pid,
+            self.output_file.write("%s, %.2f, %d, %.12s, %s, %s, %.2f, %.2f\n" % ("TCP",
+                time_ticks,
+                k.pid,
                 k.name,
                 k.laddr + ":" + str(k.lport),
                 k.daddr + ":" + str(k.dport),
-                int(recv_bytes / 1024), int(send_bytes / 1024)))
+                (recv_bytes / 1024), (send_bytes / 1024)))
+            print("%s, %.2f, %d, %.12s, %s, %s, %.2f, %.2f\n" % ("TCP",
+                time_ticks,
+                k.pid,
+                k.name,
+                k.laddr + ":" + str(k.lport),
+                k.daddr + ":" + str(k.dport),
+                (recv_bytes / 1024), (send_bytes / 1024)))
+        
 
         for k, (send_bytes, recv_bytes) in sorted(ipv6_throughput.items(),
                                                     key=lambda kv: sum(kv[1]),
                                                     reverse=True):
-            self.output_file.write("%d, %.12s, %s, %s, %d , %d\n" % (k.pid,
+            self.output_file.write("%s, %.2f, %d, %.12s, %s, %s, %.2f , %.2f\n" % ("TCP",
+                time_ticks,
+                k.pid,
                 k.name,
                 k.laddr + ":" + str(k.lport),
                 k.daddr + ":" + str(k.dport),
-                int(recv_bytes / 1024), int(send_bytes / 1024)))
+                (recv_bytes / 1024), (send_bytes / 1024)))
+            print("%s, %.2f, %d, %.12s, %s, %s, %.2f , %.2f\n" % ("TCP",
+                time_ticks,
+                k.pid,
+                k.name,
+                k.laddr + ":" + str(k.lport),
+                k.daddr + ":" + str(k.dport),
+                (recv_bytes / 1024), (send_bytes / 1024)))
 
+        for k, (send_bytes, recv_bytes) in sorted(udp_throughput.items(),
+                                        key=lambda kv: sum(kv[1]),
+                                        reverse=True):
+            self.output_file.write("%s, %.2f, %d, %.12s, %s, %s, %.2f, %.2f\n" % ("UDP",
+                time_ticks,
+                k.pid,
+                k.name,
+                k.laddr + ":" + str(k.lport),
+                k.daddr + ":" + str(k.dport),
+                (recv_bytes / 1024), (send_bytes / 1024)))
+            print("%s, %.2f, %d, %.12s, %s, %s, %.2f, %.2f\n" % ("UDP",
+                time_ticks,
+                k.pid,
+                k.name,
+                k.laddr + ":" + str(k.lport),
+                k.daddr + ":" + str(k.dport),
+                (recv_bytes / 1024), (send_bytes / 1024)))       
         self.output_file.flush()
 
     def main_loop(self):
-        self.output_file.write("%s, %-s, %s, %s, %s, %s\n" % ("PID", "COMM",
-            "LADDR6", "RADDR6", "RX_KB", "TX_KB"))
+        self.output_file.write("%s, %s, %s, %s, %s, %s, %s, %s\n" % ("PROTOCOL", "TICKS", 
+        "PID", "COMM", "LADDR6", "RADDR6", "RX_KB", "TX_KB"))
         # while True:
         while True:
             try:
@@ -232,10 +358,7 @@ class NetworkSnoop():
                 if not self.output_file.closed:
                     self.output_file.close()
                 exit()
-
             self.record()
-
-
 
     def run(self, interval, output_filename='net.csv', pid=None):
         self.interval = interval
@@ -246,6 +369,6 @@ class NetworkSnoop():
         self.main_loop()
 
 if __name__=="__main__":
-    pid = run_command_get_pid("python3 tcp.py")
+    pid = run_command_get_pid("python3 client.py")
     network_snoop = NetworkSnoop()
     network_snoop.run(5, "net.csv", pid)
