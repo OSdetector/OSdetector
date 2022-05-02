@@ -34,7 +34,7 @@ class TOPSnoop():
             help="id of the process to trace (optional)")
         parser.add_argument("-c", "--command",
             help="execute and trace the specified command (optional)")
-        parser.add_argument("-i", "--interval", type=int, default=1,
+        parser.add_argument("-i", "--interval", type=int, default=15,
             help="The interval of snoop (unit:s)")
         args = parser.parse_args()
         if args.command is not None:
@@ -42,9 +42,14 @@ class TOPSnoop():
             popen = run_command(args.command)
             self.popens.append(popen)
             self.snoop_pid = popen.pid
-        else:
+        elif args.pid is not None:
             self.snoop_pid = args.pid
+        else:
+            print("Please specify the pid or command!")
+            exit()
         self.interval = args.interval
+        if self.interval < 20:
+            print("Set interval smaller than 20 second may cause inaccuracy in CPU utilization")
     
     def run(self):
         cpu_snoop_process = mp.Process(target=self.cpu_snoop.run, args=(self.interval, "cpu.csv", self.snoop_pid))
