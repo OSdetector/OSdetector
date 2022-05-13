@@ -1,0 +1,5 @@
+[normal]
+data = [
+    "data/realAWSCloudwatch/ec2_cpu_utilization_5f5533.csv"
+]
+[anomaly]
