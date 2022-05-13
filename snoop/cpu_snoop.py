@@ -265,10 +265,12 @@ class CPUSnoop:
         for k, v in sorted(self.bpf['cpu_time'].items_lookup_and_delete_batch(), key=lambda kv: (kv[1].oncpu_time), reverse=True):
             comm = pid_to_comm(k).strip('\n')
             oncpu_time_ms = v.oncpu_time / 1e6
-            offcpu_time_ms = v.offcpu_time / 1e6
-            total_time_ms = oncpu_time_ms + offcpu_time_ms
+            # offcpu_time_ms = v.offcpu_time / 1e6
+            offcpu_time_ms = period - oncpu_time_ms
+            # total_time_ms = oncpu_time_ms + offcpu_time_ms
+            total_time_ms = period
             # utilization = oncpu_time_ms / total_time_ms if total_time_ms > 0 else 0
-            utilization = oncpu_time_ms / total_time_ms if not total_time_ms == 0 else 0
+            utilization = oncpu_time_ms / total_time_ms if total_time_ms > 0.1 else 0
             # self.output_file.write("%-12.2f %-12d %-20s %-20.2f %-20.2f %-20.2f\n" % (
             #                         time_stamp,
             #                         k, 
@@ -277,7 +279,7 @@ class CPUSnoop:
             #                         offcpu_time_ms,
             #                         utilization * 100,
             #                         ))
-            self.output_file.write("%.2f,%12d,%20s,%2f,%.2f,%.2f\n" % (
+            self.output_file.write("%.2f,%12d,%20s,%.2f,%.2f,%.2f\n" % (
                                     time_stamp,
                                     k, 
                                     comm,
@@ -289,7 +291,7 @@ class CPUSnoop:
             self.output_file.flush()
 
     def main_loop(self, interval, process_cpu_time):
-        prev_time = time.time()
+        prev_time = self.start_time
         while True:
             try:
                 sleep(interval)
@@ -312,6 +314,7 @@ class CPUSnoop:
         self.proc = psutil.Process(snoop_pid)
         self.generate_program(snoop_pid=snoop_pid)
         self.attatch_probe()
+        self.start_time = time.time()
         self.cpu_time = self.bpf['cpu_time']
         process_cpu_time = {}
 
