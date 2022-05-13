@@ -8,6 +8,7 @@ import subprocess
 import os
 import sys
 import time
+import psutil
 
 from utils import run_command_get_pid, run_command
 
@@ -408,10 +409,9 @@ class MEMSnoop():
                 self.output_file.close()
                 exit()
 
-    def run(self, interval, output_filename, proc):
-        pid = proc.pid
-        self.proc = proc
-        self.snoop_pid = pid
+    def run(self, interval, output_filename, snoop_pid):
+        self.proc = psutil.Process(snoop_pid)
+        self.snoop_pid = snoop_pid
         self.output_file = open(output_filename, "w")
         self.generate_program()
         self.attatch_probe()

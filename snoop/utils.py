@@ -1,5 +1,4 @@
 import subprocess
-import psutil
 
 def pid_to_comm(pid):
     """根据pid查找/proc/pid/comm获取comm

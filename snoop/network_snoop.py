@@ -8,6 +8,7 @@ from struct import pack
 from time import sleep, strftime, time
 from subprocess import call
 from collections import namedtuple, defaultdict
+import psutil
 from utils import run_command_get_pid, run_command
 
 text = """
@@ -113,9 +114,8 @@ class NetworkSnoop():
                 self.output_file.close()
                 exit()
 
-    def run(self, interval, output_filename='net.csv', proc=None):
-        snoop_pid = proc.pid
-        self.proc = proc
+    def run(self, interval, output_filename='net.csv', snoop_pid=None):
+        self.proc = psutil.Process(snoop_pid)
         self.interval = interval
         self.snoop_pid = snoop_pid
         self.generate_program()
