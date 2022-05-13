@@ -290,7 +290,7 @@ class MEMSnoop():
         attach_probes("memalign")
         attach_probes("pvalloc", can_fail=True) # failed on Android, is deprecated in libc.so from bionic directory
         attach_probes("aligned_alloc", can_fail=True)  # added in C11
-        # 监控某个其他自定义函数
+        # 挂载free函数释放内存
         self.bpf.attach_uprobe(name=obj, sym="free", fn_name="free_enter",
                                   pid=self.snoop_pid)
 
@@ -387,6 +387,7 @@ class MEMSnoop():
 
 if __name__=="__main__":
     mem_snoop = MEMSnoop()
-    pid = run_command_get_pid("/home/li/repository/bcc_detector/OSdetector/test_examples/mem")
+    pid = run_command_get_pid("../test_examples/mem")
+#     pid = 574334
     mem_snoop.run(5, "mem.csv", pid)
 

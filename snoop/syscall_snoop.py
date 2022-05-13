@@ -1,5 +1,6 @@
 from bcc import BPF
 from utils import run_command_get_pid
+
 text = """
 #include <uapi/linux/ptrace.h>
 #include <net/sock.h>
@@ -32,8 +33,6 @@ BPF_PERF_OUTPUT(enter_channel);
 BPF_PERF_OUTPUT(ret_channel);
 BPF_PERF_OUTPUT(event);
 
-
-
 TRACEPOINT_PROBE(raw_syscalls, sys_enter)
 {
     struct data_t data = {0};
@@ -57,13 +56,9 @@ TRACEPOINT_PROBE(raw_syscalls, sys_enter)
     data.ip = regs->ip;
     data.type = ENTER;
 
-    
     bpf_trace_printk("Enter %d %u\\n", 
                         data.syscall_id,
                         data.ret);
-    
-    // enter_channel.perf_submit(args, &data, sizeof(data));
-    //event.perf_submit(args, &data, sizeof(data));
 
     return 0;
 }
@@ -92,9 +87,6 @@ TRACEPOINT_PROBE(raw_syscalls, sys_exit)
     
     bpf_trace_printk("Leave %d %d\\n", 
                         data.syscall_id, data.ret);
-    
-    //ret_channel.perf_submit(args, &data, sizeof(data));
-    //event.perf_submit(args, &data, sizeof(data));
     return 0;
 }
 """
@@ -135,6 +127,6 @@ class SyscallSnoop():
 
 
 if __name__=="__main__":
-    snoop = syscall_snoop()
+    snoop = SyscallSnoop()
     pid = run_command_get_pid("python3 tcp.py")
     snoop.run(output_filename="tmp.csv", snoop_pid=pid)

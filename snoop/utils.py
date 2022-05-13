@@ -1,6 +1,5 @@
 import subprocess
 
-
 def pid_to_comm(pid):
     """根据pid查找/proc/pid/comm获取comm
 
@@ -23,7 +22,7 @@ def run_command_get_output(command):
         command (str): 待执行命令
 
     Returns:
-        _type_: _description_
+        iteration: 命令的输出
     """
     p = subprocess.Popen(command.split(),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -36,11 +35,19 @@ def run_command_get_pid(command):
         command (str): 待执行命令
 
     Returns:
-        _type_: _description_
+        int: pid
     """
     p = subprocess.Popen(command.split())
     return p.pid
 
 def run_command(command):
+    """执行命令
+
+    Args:
+        command (str): 待执行命令
+
+    Returns:
+        subprocess: 进程
+    """
     p = subprocess.Popen(command.split())
     return p
