@@ -1,5 +1,5 @@
 import subprocess
-
+import psutil
 
 def pid_to_comm(pid):
     """根据pid查找/proc/pid/comm获取comm
@@ -26,7 +26,7 @@ def run_command_get_output(command):
         _type_: _description_
     """
     p = subprocess.Popen(command.split(),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return iter(p.stdout.readline, b'')
 
 def run_command_get_pid(command):
@@ -38,6 +38,7 @@ def run_command_get_pid(command):
     Returns:
         _type_: _description_
     """
+    # p = subprocess.Popen(command.split())
     p = subprocess.Popen(command.split())
     return p.pid
 

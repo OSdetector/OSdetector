@@ -1,5 +1,5 @@
 from bcc import BPF
-from utils import run_command_get_pid
+from utils import run_command_get_pid, run_command
 text = """
 #include <uapi/linux/ptrace.h>
 #include <net/sock.h>
@@ -125,8 +125,14 @@ class SyscallSnoop():
                     self.output_file.close()
                 continue
             self.record(task, pid, ts, msg)
+            if self.proc.status() == "zombie":
+                self.output_file.write("END")
+                self.output_file.close()
+                exit()
 
-    def run(self, output_filename, snoop_pid):
+    def run(self, output_filename, proc):
+        snoop_pid = proc.pid
+        self.proc = proc
         self.generate_program(snoop_pid)
         self.attatch_probe()
         self.output_file = open(output_filename, "w")
@@ -135,6 +141,6 @@ class SyscallSnoop():
 
 
 if __name__=="__main__":
-    snoop = syscall_snoop()
-    pid = run_command_get_pid("python3 tcp.py")
-    snoop.run(output_filename="tmp.csv", snoop_pid=pid)
+    snoop = SyscallSnoop()
+    proc = run_command("python3 tcp.py")
+    snoop.run(output_filename="tmp.csv", proc=proc)
