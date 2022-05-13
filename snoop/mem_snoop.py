@@ -8,6 +8,7 @@ import subprocess
 import os
 import sys
 import time
+import psutil
 
 from utils import run_command_get_pid, run_command
 
@@ -29,28 +30,28 @@ BPF_HASH(sizes, u64);    // sizes记录某次某个pid分配的内存大小，�
 BPF_HASH(allocs, u64, struct alloc_info_t, 1000000);   // 记录每次分配的信息，addr->info
 BPF_HASH(memptrs, u64, u64);
 BPF_STACK_TRACE(stack_traces, 10240);
-BPF_HASH(combined_allocs, u64, struct combined_alloc_info_t, 10240);
+BPF_HASH(combined_allocs, u32, struct combined_alloc_info_t, 10240);
 
 // 更新某个进程栈的空间大小
-static inline void update_statistics_add(u64 stack_id, u64 sz) {
+static inline void update_statistics_add(u32 pid, u64 sz) {
         struct combined_alloc_info_t *existing_cinfo;
         struct combined_alloc_info_t cinfo = {0};
 
-        existing_cinfo = combined_allocs.lookup(&stack_id);
+        existing_cinfo = combined_allocs.lookup(&pid);
         if (existing_cinfo != 0)
                 cinfo = *existing_cinfo;
 
         cinfo.total_size += sz;
         cinfo.number_of_allocs += 1;
 
-        combined_allocs.update(&stack_id, &cinfo);
+        combined_allocs.update(&pid, &cinfo);
 }
 // 减小栈大小，与上面相反
-static inline void update_statistics_del(u64 stack_id, u64 sz) {
+static inline void update_statistics_del(u32 pid, u64 sz) {
         struct combined_alloc_info_t *existing_cinfo;
         struct combined_alloc_info_t cinfo = {0};
 
-        existing_cinfo = combined_allocs.lookup(&stack_id);
+        existing_cinfo = combined_allocs.lookup(&pid);
         if (existing_cinfo != 0)
                 cinfo = *existing_cinfo;
 
@@ -62,7 +63,7 @@ static inline void update_statistics_del(u64 stack_id, u64 sz) {
         if (cinfo.number_of_allocs > 0)
                 cinfo.number_of_allocs -= 1;
 
-        combined_allocs.update(&stack_id, &cinfo);
+        combined_allocs.update(&pid, &cinfo);
 }
 
 static inline int gen_alloc_enter(struct pt_regs *ctx, size_t size) {
@@ -83,21 +84,22 @@ static inline int gen_alloc_enter(struct pt_regs *ctx, size_t size) {
 }
 
 static inline int gen_alloc_exit2(struct pt_regs *ctx, u64 address) {
-        u64 pid = bpf_get_current_pid_tgid();
-        u64* size64 = sizes.lookup(&pid);
+        u64 pid_tgid = bpf_get_current_pid_tgid();
+        u64* size64 = sizes.lookup(&pid_tgid);
         struct alloc_info_t info = {0};
 
         if (size64 == 0)
                 return 0; // missed alloc entry
 
         info.size = *size64;
-        sizes.delete(&pid);
+        sizes.delete(&pid_tgid);
 
         if (address != 0) {
                 info.timestamp_ns = bpf_ktime_get_ns();
                 info.stack_id = stack_traces.get_stackid(ctx, STACK_FLAGS);
                 allocs.update(&address, &info);
-                update_statistics_add(info.stack_id, info.size);
+                u32 pid = pid_tgid;
+                update_statistics_add(pid, info.size);
         }
 
         if (SHOULD_PRINT) {
@@ -118,7 +120,8 @@ static inline int gen_free_enter(struct pt_regs *ctx, void *address) {
                 return 0;
 
         allocs.delete(&addr);
-        update_statistics_del(info->stack_id, info->size);
+        u32 pid = bpf_get_current_pid_tgid();
+        update_statistics_del(pid, info->size);
 
         if (SHOULD_PRINT) {
                 bpf_trace_printk("free entered, address = %lx, size = %lu\\n",
@@ -214,6 +217,27 @@ int pvalloc_exit(struct pt_regs *ctx) {
         return gen_alloc_exit(ctx);
 }
 
+int clear_mem(struct pt_regs *ctx)
+{
+        u64 pid_tgid = bpf_get_current_pid_tgid();
+        u32 tgid = pid_tgid >> 32, pid = pid_tgid;
+        PID_FILTER
+        sizes.delete(&pid_tgid);
+        struct combined_alloc_info_t *existing_cinfo;
+        struct combined_alloc_info_t cinfo = {0};
+
+        existing_cinfo = combined_allocs.lookup(&pid);
+        if (existing_cinfo != 0)
+                cinfo = *existing_cinfo;
+
+        cinfo.total_size = 0 ;
+        cinfo.number_of_allocs = 0;
+
+        combined_allocs.update(&pid, &cinfo);
+
+    return 0;
+}
+
 """
 
 class Allocation(object):
@@ -257,6 +281,7 @@ class MEMSnoop():
         self.prg = self.prg.replace("PAGE_SIZE", str(resource.getpagesize()))
         self.prg = self.prg.replace("STACK_FLAGS", "0"+"|BPF_F_USER_STACK")
         self.prg = self.prg.replace("SIZE_FILTER", "")
+        self.prg = self.prg.replace("PID_FILTER", "if(pid!=%d) return" % self.snoop_pid)
         with open("snoop_bpf", "w") as f:
                 f.write(self.prg)
 
@@ -293,6 +318,7 @@ class MEMSnoop():
         # 挂载free函数释放内存
         self.bpf.attach_uprobe(name=obj, sym="free", fn_name="free_enter",
                                   pid=self.snoop_pid)
+        self.bpf.attach_tracepoint("syscalls:sys_enter_kill", "clear_mem")
 
     def print_outstanding(self, top_stacks=10):
         print("[%s] Top %d stacks with outstanding allocations:" %
@@ -362,8 +388,9 @@ class MEMSnoop():
         stacks = sorted(self.bpf["combined_allocs"].items(),
                         key=lambda a: -a[1].total_size)
         cur_time = time.time()
-        for stack_id, info in stacks:
+        for pid, info in stacks:
                 self.output_file.write("%.2f, %d, %d\n" % (cur_time, info.total_size, info.number_of_allocs))
+                # print("%.2f, %d, %d\n" % (cur_time, info.total_size, info.number_of_allocs), pid)
 
         self.output_file.flush()
 
@@ -377,9 +404,14 @@ class MEMSnoop():
                             self.output_file.close()
                     exit()
             self.record()
+            if self.proc.status() == "zombie":
+                self.output_file.write("END")
+                self.output_file.close()
+                exit()
 
-    def run(self, interval, output_filename, pid):
-        self.snoop_pid = pid
+    def run(self, interval, output_filename, snoop_pid):
+        self.proc = psutil.Process(snoop_pid)
+        self.snoop_pid = snoop_pid
         self.output_file = open(output_filename, "w")
         self.generate_program()
         self.attatch_probe()

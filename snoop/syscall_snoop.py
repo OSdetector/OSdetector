@@ -1,6 +1,6 @@
 from bcc import BPF
+import psutil
 from utils import run_command_get_pid
-
 text = """
 #include <uapi/linux/ptrace.h>
 #include <net/sock.h>
@@ -104,21 +104,30 @@ class SyscallSnoop():
         return  
 
     def record(self, task, pid, ts, msg):
+        if msg is None:
+            return
         msg = msg.split(b" ")
         self.output_file.write("%-18.9f, %-16s, %-6d, %s, %s, %s\n" % (ts, task, pid, msg[0], msg[1], msg[2]))
+        # print(("%-18.9f, %-16s, %-6d, %s, %s, %s\n" % (ts, task, pid, msg[0], msg[1], msg[2])))
         self.output_file.flush()
 
     def main_loop(self):
         while 1:
+            # print("1")
             try:
-                (task, pid, cpu, flags, ts, msg) = self.bpf.trace_fields()
+                (task, pid, cpu, flags, ts, msg) = self.bpf.trace_fields(nonblocking=True)
             except KeyboardInterrupt:
                 if not self.output_file.closed:
                     self.output_file.close()
                 continue
             self.record(task, pid, ts, msg)
+            if self.proc.status() == "zombie":
+                self.output_file.write("END")
+                self.output_file.close()
+                exit()
 
     def run(self, output_filename, snoop_pid):
+        self.proc = psutil.Process(snoop_pid)
         self.generate_program(snoop_pid)
         self.attatch_probe()
         self.output_file = open(output_filename, "w")
@@ -128,5 +137,5 @@ class SyscallSnoop():
 
 if __name__=="__main__":
     snoop = SyscallSnoop()
-    pid = run_command_get_pid("python3 tcp.py")
+    pid = run_command_get_pid("../test_examples/mem")
     snoop.run(output_filename="tmp.csv", snoop_pid=pid)

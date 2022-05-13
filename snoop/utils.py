@@ -25,7 +25,7 @@ def run_command_get_output(command):
         iteration: 命令的输出
     """
     p = subprocess.Popen(command.split(),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return iter(p.stdout.readline, b'')
 
 def run_command_get_pid(command):
@@ -37,6 +37,7 @@ def run_command_get_pid(command):
     Returns:
         int: pid
     """
+    # p = subprocess.Popen(command.split())
     p = subprocess.Popen(command.split())
     return p.pid
 

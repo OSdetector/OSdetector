@@ -63,6 +63,7 @@ class TOPSnoop():
         net_snoop_process.start()
         syscall_snoop_process.start()
 
+
 if __name__=="__main__":
     top_snoop = TOPSnoop()
     top_snoop.run()

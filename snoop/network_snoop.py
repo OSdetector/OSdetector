@@ -8,7 +8,8 @@ from struct import pack
 from time import sleep, strftime, time
 from subprocess import call
 from collections import namedtuple, defaultdict
-from utils import run_command_get_pid
+import psutil
+from utils import run_command_get_pid, run_command
 
 text = """
 #include <uapi/linux/ptrace.h>
@@ -108,16 +109,21 @@ class NetworkSnoop():
                     self.output_file.close()
                 exit()
             self.record()
+            if self.proc.status() == "zombie":
+                self.output_file.write("END")
+                self.output_file.close()
+                exit()
 
-    def run(self, interval, output_filename='net.csv', pid=None):
+    def run(self, interval, output_filename='net.csv', snoop_pid=None):
+        self.proc = psutil.Process(snoop_pid)
         self.interval = interval
-        self.snoop_pid = pid
+        self.snoop_pid = snoop_pid
         self.generate_program()
         self.attatch_probe()
         self.output_file = open(output_filename, "w")
         self.main_loop()
 
 if __name__=="__main__":
-    pid = run_command_get_pid("python3 udp.py")
+    proc = run_command("../test_examples/net")
     network_snoop = NetworkSnoop()
-    network_snoop.run(5, "net.csv", pid)
+    network_snoop.run(5, "net.csv", proc)
