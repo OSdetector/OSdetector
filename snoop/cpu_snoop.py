@@ -304,7 +304,13 @@ class CPUSnoop:
             cur_time = time.time()
             self.record(process_cpu_time, (cur_time-prev_time)*1e3, cur_time)
             prev_time = cur_time
-            if self.proc.status() == "zombie":
+            try:
+                status = self.proc.status()
+            except Exception:
+                self.output_file.write("END")
+                self.output_file.close()
+                exit()
+            if status == "zombie":
                 self.output_file.write("END")
                 self.output_file.close()
                 exit()

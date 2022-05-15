@@ -109,7 +109,13 @@ class NetworkSnoop():
                     self.output_file.close()
                 exit()
             self.record()
-            if self.proc.status() == "zombie":
+            try:
+                status = self.proc.status()
+            except Exception:
+                self.output_file.write("END")
+                self.output_file.close()
+                exit()
+            if status == "zombie":
                 self.output_file.write("END")
                 self.output_file.close()
                 exit()

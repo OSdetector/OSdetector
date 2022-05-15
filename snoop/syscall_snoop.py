@@ -12,6 +12,9 @@ enum output_type{
     RETURN
 };
 
+#define SYSCALL_ID_EXIT 64
+#define SYSCALL_ID_EXIT_GROUP 231
+
 struct data_t{
     enum output_type type;
     u32 pid;
@@ -60,7 +63,8 @@ TRACEPOINT_PROBE(raw_syscalls, sys_enter)
     bpf_trace_printk("Enter %d %u\\n", 
                         data.syscall_id,
                         data.ret);
-
+    if(data.syscall_id==SYSCALL_ID_EXIT || data.syscall_id==SYSCALL_ID_EXIT_GROUP)
+        bpf_trace_printk("END 0 0\\n");
     return 0;
 }
 
@@ -111,21 +115,29 @@ class SyscallSnoop():
         self.output_file.write("%-18.9f,%-16s,%-6d,%s,%s,%s\n" % (ts, task, pid, msg[0], msg[1], msg[2]))
         # print(("%-18.9f, %-16s, %-6d, %s, %s, %s\n" % (ts, task, pid, msg[0], msg[1], msg[2])))
         self.output_file.flush()
-
+        if(msg[0] == b'END'):
+            self.output_file.close()
+            exit()
     def main_loop(self):
         while 1:
             # print("1")
             try:
-                (task, pid, cpu, flags, ts, msg) = self.bpf.trace_fields(nonblocking=True)
+                (task, pid, cpu, flags, ts, msg) = self.bpf.trace_fields(nonblocking=False)
             except KeyboardInterrupt:
                 if not self.output_file.closed:
                     self.output_file.close()
                 continue
             self.record(task, pid, ts, msg)
-            if self.proc.status() == "zombie":
-                self.output_file.write("END")
-                self.output_file.close()
-                exit()
+            # try:
+            #     status = self.proc.status()
+            # except Exception:
+            #     self.output_file.write("END")
+            #     self.output_file.close()
+            #     exit()
+            # if status == "zombie":
+            #     self.output_file.write("END")
+            #     self.output_file.close()
+            #     exit()
 
     def run(self, output_filename, snoop_pid):
         self.proc = psutil.Process(snoop_pid)
@@ -138,5 +150,5 @@ class SyscallSnoop():
 
 if __name__=="__main__":
     snoop = SyscallSnoop()
-    pid = run_command_get_pid("../test_examples/cpu")
+    pid = run_command_get_pid("../test_examples/mem")
     snoop.run(output_filename="tmp.csv", snoop_pid=pid)
