@@ -1,3 +1,4 @@
+#! /bin/python3
 from bcc import BPF
 import psutil
 from utils import run_command_get_pid
@@ -107,7 +108,7 @@ class SyscallSnoop():
         if msg is None:
             return
         msg = msg.split(b" ")
-        self.output_file.write("%-18.9f, %-16s, %-6d, %s, %s, %s\n" % (ts, task, pid, msg[0], msg[1], msg[2]))
+        self.output_file.write("%-18.9f,%-16s,%-6d,%s,%s,%s\n" % (ts, task, pid, msg[0], msg[1], msg[2]))
         # print(("%-18.9f, %-16s, %-6d, %s, %s, %s\n" % (ts, task, pid, msg[0], msg[1], msg[2])))
         self.output_file.flush()
 
@@ -131,11 +132,11 @@ class SyscallSnoop():
         self.generate_program(snoop_pid)
         self.attatch_probe()
         self.output_file = open(output_filename, "w")
-        self.output_file.write("TICKS, COMM, PID, ACTION, SYSCALL_IP, RET\n")
+        self.output_file.write("TICKS,COMM,PID,ACTION,SYSCALL_ID,RET\n")
         self.main_loop()
 
 
 if __name__=="__main__":
     snoop = SyscallSnoop()
-    pid = run_command_get_pid("../test_examples/mem")
+    pid = run_command_get_pid("../test_examples/cpu")
     snoop.run(output_filename="tmp.csv", snoop_pid=pid)

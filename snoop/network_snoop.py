@@ -86,7 +86,7 @@ class NetworkSnoop():
         for k, (send_bytes, recv_bytes) in sorted(throughput.items(),
                                                 key=lambda kv: sum(kv[1]),
                                                 reverse=True):
-            self.output_file.write("%.2f, %d, %.12s, %.2f, %.2f\n" % (
+            self.output_file.write("%.2f,%d,%.12s,%.2f,%.2f\n" % (
                 time_ticks,
                 k.pid,
                 k.name,
@@ -98,7 +98,7 @@ class NetworkSnoop():
             #     (recv_bytes / 1024), (send_bytes / 1024)))
 
     def main_loop(self):
-        self.output_file.write("%s, %s, %s, %s, %s\n" % ("TICKS",
+        self.output_file.write("%s,%s,%s,%s,%s\n" % ("TICKS",
         "PID", "COMM", "RX_KB", "TX_KB"))
         # while True:
         while True:

@@ -389,13 +389,13 @@ class MEMSnoop():
                         key=lambda a: -a[1].total_size)
         cur_time = time.time()
         for pid, info in stacks:
-                self.output_file.write("%.2f, %d, %d\n" % (cur_time, info.total_size, info.number_of_allocs))
+                self.output_file.write("%.2f,%d,%d\n" % (cur_time, info.total_size, info.number_of_allocs))
                 # print("%.2f, %d, %d\n" % (cur_time, info.total_size, info.number_of_allocs), pid)
 
         self.output_file.flush()
 
     def main_loop(self, interval):
-        self.output_file.write("%s, %s, %s\n" % ("ticks", "size(B)", "times"))
+        self.output_file.write("%s,%s,%s\n" % ("ticks", "size(B)", "times"))
         while True:
             try:
                     sleep(interval)
