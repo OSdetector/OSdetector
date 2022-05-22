@@ -27,10 +27,13 @@ typedef struct process_info{
     char comm[TASK_COMM_LEN];
 }process_info;
 
-BPF_HASH(oncpu_start, u32, u64, MAX_PID);    // BPF_HASH(name [, key_type [, leaf_type [, size]]])
-BPF_HASH(offcpu_start, u32, u64, MAX_PID);   // BPF_HASH(name [, key_type [, leaf_type [, size]]])
-BPF_HASH(cpu_time, u32, process_cpu_time, MAX_PID);
+//BPF_HASH(oncpu_start, u32, u64, MAX_PID);    // BPF_HASH(name [, key_type [, leaf_type [, size]]])
+//BPF_HASH(offcpu_start, u32, u64, MAX_PID);   // BPF_HASH(name [, key_type [, leaf_type [, size]]])
+//BPF_HASH(cpu_time, u32, process_cpu_time, MAX_PID);
 
+BPF_HASH(oncpu_start, u32, u64);    // BPF_HASH(name [, key_type [, leaf_type [, size]]])
+BPF_HASH(offcpu_start, u32, u64);   // BPF_HASH(name [, key_type [, leaf_type [, size]]])
+BPF_HASH(cpu_time, u32, process_cpu_time);
 /*
 char* get_comm(u32 pid)
 {
