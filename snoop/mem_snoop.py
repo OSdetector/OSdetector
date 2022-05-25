@@ -14,13 +14,13 @@ from utils import run_command_get_pid, run_command
 
 text="""
 #include <uapi/linux/ptrace.h>
-
+// 记录单次内存分配的数据结构
 struct alloc_info_t {
         u64 size;
         u64 timestamp_ns;
         int stack_id;
 };
-
+// 记录进程所有内存分配的数据结构
 struct combined_alloc_info_t {
         u64 total_size;
         u64 number_of_allocs;
@@ -65,24 +65,15 @@ static inline void update_statistics_del(u32 pid, u64 sz) {
 
         combined_allocs.update(&pid, &cinfo);
 }
-
+// 内存申请挂载函数，挂载在函数入口获得内存申请大小
 static inline int gen_alloc_enter(struct pt_regs *ctx, size_t size) {
-        SIZE_FILTER    // 大小过滤，后面用python替换成条件判断
-        if (SAMPLE_EVERY_N > 1) {
-                u64 ts = bpf_ktime_get_ns();
-                if (ts % SAMPLE_EVERY_N != 0)
-                        return 0;
-        }
-
         u64 pid = bpf_get_current_pid_tgid();
         u64 size64 = size;
         sizes.update(&pid, &size64);
 
-        if (SHOULD_PRINT)
-                bpf_trace_printk("alloc entered, size = %u\\n", size);
         return 0;
 }
-
+// 内存申请挂载函数，挂载在函数返回处更新内存信息
 static inline int gen_alloc_exit2(struct pt_regs *ctx, u64 address) {
         u64 pid_tgid = bpf_get_current_pid_tgid();
         u64* size64 = sizes.lookup(&pid_tgid);
@@ -96,23 +87,19 @@ static inline int gen_alloc_exit2(struct pt_regs *ctx, u64 address) {
 
         if (address != 0) {
                 info.timestamp_ns = bpf_ktime_get_ns();
-                info.stack_id = stack_traces.get_stackid(ctx, STACK_FLAGS);
+                info.stack_id = stack_traces.get_stackid(ctx, 0 | BPF_F_USER_STACK);
                 allocs.update(&address, &info);
                 u32 pid = pid_tgid;
                 update_statistics_add(pid, info.size);
         }
 
-        if (SHOULD_PRINT) {
-                bpf_trace_printk("alloc exited, size = %lu, result = %lx\\n",
-                                 info.size, address);
-        }
         return 0;
 }
 
 static inline int gen_alloc_exit(struct pt_regs *ctx) {
         return gen_alloc_exit2(ctx, PT_REGS_RC(ctx));
 }
-
+// 内存释放挂在函数
 static inline int gen_free_enter(struct pt_regs *ctx, void *address) {
         u64 addr = (u64)address;
         struct alloc_info_t *info = allocs.lookup(&addr);
@@ -123,12 +110,10 @@ static inline int gen_free_enter(struct pt_regs *ctx, void *address) {
         u32 pid = bpf_get_current_pid_tgid();
         update_statistics_del(pid, info->size);
 
-        if (SHOULD_PRINT) {
-                bpf_trace_printk("free entered, address = %lx, size = %lu\\n",
-                                 address, info->size);
-        }
         return 0;
 }
+
+// 具体的用户态内存分配相关函数的挂载函数
 
 int malloc_enter(struct pt_regs *ctx, size_t size) {
         return gen_alloc_enter(ctx, size);
@@ -237,57 +222,26 @@ int clear_mem(struct pt_regs *ctx)
 
     return 0;
 }
-
 """
-
-class Allocation(object):
-    def __init__(self, stack, size):
-        self.stack = stack
-        self.count = 1
-        self.size = size
-
-    def update(self, size):
-        self.count += 1
-        self.size += size
 
 class MEMSnoop():
     def __init__(self):
         self.prg = text
     
-    def parse_args(self):
-        parser = argparse.ArgumentParser(description="Attach to " +
-                  "process and snoop its resource usage",
-                  formatter_class=argparse.RawDescriptionHelpFormatter
-                  )
-        parser.add_argument("-p", "--pid", type=int, metavar="PID",
-            help="id of the process to trace (optional)")
-        parser.add_argument("-c", "--command",
-            help="execute and trace the specified command")
-        parser.add_argument("-i", "--interval", type=int, 
-            help="The interval of snoop")
-        args = parser.parse_args()
-        if args.command is not None:
-            print("Executing '%s' and tracing the resulting process." % args.command)
-            popen = run_command(args.command)
-            self.popens.append(popen)
-            self.snoop_pid = popen.pid
-        else:
-            self.snoop_pid = args.pid
-        self.interval = args.interval if args.interval is not None else 5
-
     def generate_program(self):
-        self.prg = self.prg.replace("SHOULD_PRINT", "1")
-        self.prg = self.prg.replace("SAMPLE_EVERY_N", str(1))
-        self.prg = self.prg.replace("PAGE_SIZE", str(resource.getpagesize()))
-        self.prg = self.prg.replace("STACK_FLAGS", "0"+"|BPF_F_USER_STACK")
-        self.prg = self.prg.replace("SIZE_FILTER", "")
+        """生成挂载程序，主要是修改监控进程PID
+        """
         self.prg = self.prg.replace("PID_FILTER", "if(pid!=%d) return" % self.snoop_pid)
-        with open("snoop_bpf", "w") as f:
-                f.write(self.prg)
+        self.bpf = BPF(text=self.prg)
+
 
     def attatch_probe(self, obj="c"):
+        """将挂载函数挂载到对应的挂载点上
+
+        Args:
+        obj (str, optional): 对应内存相关函数的二进制文件. Defaults to "c".
+        """
         self.bpf = BPF(text=self.prg)
-        print("Attaching to pid %d, Ctrl+C to quit." % self.snoop_pid)
 
         def attach_probes(sym, fn_prefix=None, can_fail=False):
                 if fn_prefix is None:
@@ -320,71 +274,9 @@ class MEMSnoop():
                                   pid=self.snoop_pid)
         self.bpf.attach_tracepoint("syscalls:sys_enter_kill", "clear_mem")
 
-    def print_outstanding(self, top_stacks=10):
-        print("[%s] Top %d stacks with outstanding allocations:" %
-              (datetime.now().strftime("%H:%M:%S"), top_stacks))
-        alloc_info = {}
-        allocs = self.bpf["allocs"]
-        stack_traces = self.bpf["stack_traces"]
-        for address, info in sorted(allocs.items(), key=lambda a: a[1].size):  # 实现按照字典中value结构体的size属性排序
-                min_age_ns = 500 * 1e6
-                if BPF.monotonic_time() - min_age_ns < info.timestamp_ns:
-                        continue
-                if info.stack_id < 0:
-                        continue
-                if info.stack_id in alloc_info:
-                        alloc_info[info.stack_id].update(info.size)
-                else:
-                        stack = list(stack_traces.walk(info.stack_id))
-                        combined = []
-                        for addr in stack:
-                                combined.append(self.bpf.sym(addr, pid,
-                                        show_module=True, show_offset=True))
-                        alloc_info[info.stack_id] = Allocation(combined,
-                                                               info.size)
-                # if args.show_allocs:
-                #         print("\taddr = %x size = %s" %
-                #               (address.value, info.size))
-        to_show = sorted(alloc_info.values(),
-                         key=lambda a: a.size)[-top_stacks:]
-        for alloc in to_show:
-                print("\t%d bytes in %d allocations from stack\n\t\t%s" %
-                      (alloc.size, alloc.count,
-                       b"\n\t\t".join(alloc.stack).decode("ascii")))
-
-    def print_outstanding_combined(self, top_stacks=10):
-        stack_traces = self.bpf["stack_traces"]
-        stacks = sorted(self.bpf["combined_allocs"].items(),
-                        key=lambda a: -a[1].total_size)
-        cnt = 1
-        entries = []
-        for stack_id, info in stacks:
-                try:
-                        trace = []
-                        for addr in stack_traces.walk(stack_id.value):
-                                sym = self.bpf.sym(addr, self.snoop_pid,
-                                                      show_module=True,
-                                                      show_offset=True)
-                                trace.append(sym)
-                        print(trace)
-                        trace = "\n\t\t".join(trace)
-                except KeyError:
-                        trace = "stack information lost"
-
-                entry = ("\t%d bytes in %d allocations from stack\n\t\t%s" %
-                         (info.total_size, info.number_of_allocs, trace))
-                entries.append(entry)
-
-                cnt += 1
-                if cnt > top_stacks:
-                    break
-
-        print("[%s] Top %d stacks with outstanding allocations:" %
-              (datetime.now().strftime("%H:%M:%S"), top_stacks))
-
-        print('\n'.join(reversed(entries)))
-
     def record(self):
+        """记录并输出数据到文件
+        """
         stacks = sorted(self.bpf["combined_allocs"].items(),
                         key=lambda a: -a[1].total_size)
         cur_time = time.time()
@@ -395,6 +287,10 @@ class MEMSnoop():
         self.output_file.flush()
 
     def main_loop(self, interval):
+        """
+        主循环体，持续等待eBPF虚拟机传来消息，调用
+        record进行输出
+        """
         self.output_file.write("%s,%s,%s\n" % ("ticks", "size(B)", "times"))
         while True:
             try:
@@ -404,6 +300,7 @@ class MEMSnoop():
                             self.output_file.close()
                     exit()
             self.record()
+        # 判断监控进程的状态，如果监控进程编程僵尸进程或进程已退出，则结束监控 
             try:
                 status = self.proc.status()
             except Exception:
@@ -416,6 +313,13 @@ class MEMSnoop():
                 exit()
 
     def run(self, interval, output_filename, snoop_pid):
+        """运行方法，对外接口
+        完成挂载程序生成，挂载程序，启动主循环等功能
+
+        Args:
+            output_filename (str): 输出文件名
+            snoop_pid (int): 监控进程
+        """
         self.proc = psutil.Process(snoop_pid)
         self.snoop_pid = snoop_pid
         self.output_file = open(output_filename, "w")
@@ -426,6 +330,5 @@ class MEMSnoop():
 if __name__=="__main__":
     mem_snoop = MEMSnoop()
     pid = run_command_get_pid("../test_examples/mem")
-#     pid = 574334
     mem_snoop.run(5, "mem.csv", pid)
 

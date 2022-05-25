@@ -10,7 +10,6 @@ from syscall_snoop import SyscallSnoop
 from utils import run_command
 import subprocess
 
-# TODO:添加'-h'选项下的使用示例
 examples="""
 EXAMPLES:
     ./top_snoop -c './snoop_program' # Run the program snoop_program and snoop its resource usage
@@ -20,6 +19,8 @@ EXAMPLES:
 
 class TOPSnoop():
     def __init__(self) -> None:
+        """初始化类，并调用参数处理函数
+        """
         self.cpu_snoop = CPUSnoop()
         self.mem_snoop = MEMSnoop()
         self.network_snoop = NetworkSnoop()
@@ -28,6 +29,8 @@ class TOPSnoop():
         self.parse_args()
     
     def parse_args(self):
+        """处理输入参数
+        """
         parser = argparse.ArgumentParser(description="Attach to " +
                   "process and snoop its resource usage",
                   formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -54,6 +57,9 @@ class TOPSnoop():
             print("Set interval smaller than 20 second may cause inaccuracy in CPU utilization")
     
     def run(self):
+        """对外接口，启动监控进程
+        使用子进程的方式来实现对多种数据同时进行监控
+        """
         cpu_snoop_process = mp.Process(target=self.cpu_snoop.run, args=(self.interval, "cpu.csv", self.snoop_pid))
         mem_snoop_process = mp.Process(target=self.mem_snoop.run, args=(self.interval, "mem.csv", self.snoop_pid))
         net_snoop_process = mp.Process(target=self.network_snoop.run, args=(self.interval, "network.csv", self.snoop_pid))

@@ -23,7 +23,7 @@ struct throughput_key_t {
 BPF_HASH(send_bytes, struct throughput_key_t);
 BPF_HASH(recv_bytes, struct throughput_key_t);
 
-
+// 挂载到ip向数据链路层传送数据包处
 TRACEPOINT_PROBE(net, net_dev_queue)
 {
     u32 pid = bpf_get_current_pid_tgid() >> 32;
@@ -33,7 +33,7 @@ TRACEPOINT_PROBE(net, net_dev_queue)
 
     send_bytes.increment(throughput_key, args->len);
 }
-
+// 挂载到接收函数
 TRACEPOINT_PROBE(net, netif_receive_skb)
 {
     u32 pid = bpf_get_current_pid_tgid() >> 32;
@@ -53,6 +53,8 @@ class NetworkSnoop():
         return
 
     def generate_program(self):
+        """生成挂载函数，主要替换监控进程PID与监控协议族
+        """
         self.prg = text
         if self.snoop_pid is not None:
             self.prg = self.prg.replace('FILTER_PID',
@@ -67,11 +69,15 @@ class NetworkSnoop():
         self.prg = filter_by_containers(tmp_arg) + self.prg
     
     def attatch_probe(self):
+        """将挂载函数挂载到挂载点
+        """
         self.bpf = BPF(text=self.prg)
         self.recv_bytes = self.bpf['recv_bytes']
         self.send_bytes = self.bpf['send_bytes']
 
     def record(self):
+        """记录并输出到文件
+        """
         throughput = defaultdict(lambda: [0, 0])
         for k, v in self.recv_bytes.items():
             key = get_throughput_key(k)
@@ -91,16 +97,14 @@ class NetworkSnoop():
                 k.pid,
                 k.name,
                 (recv_bytes / 1024), (send_bytes / 1024)))
-            # print("%.2f, %d, %.12s, %.2f, %.2f\n" % (
-            #     time_ticks,
-            #     k.pid,
-            #     k.name,
-            #     (recv_bytes / 1024), (send_bytes / 1024)))
 
-    def main_loop(self):
+    def main_loop(self):        
+        """
+        主循环体，持续等待eBPF虚拟机传来消息，调用
+        record进行输出
+        """
         self.output_file.write("%s,%s,%s,%s,%s\n" % ("TICKS",
         "PID", "COMM", "RX_KB", "TX_KB"))
-        # while True:
         while True:
             try:
                 sleep(self.interval)
@@ -109,6 +113,7 @@ class NetworkSnoop():
                     self.output_file.close()
                 exit()
             self.record()
+            # 判断监控进程的状态，如果监控进程编程僵尸进程或进程已退出，则结束监控
             try:
                 status = self.proc.status()
             except Exception:
@@ -121,6 +126,13 @@ class NetworkSnoop():
                 exit()
 
     def run(self, interval, output_filename='net.csv', snoop_pid=None):
+        """运行方法，对外接口
+        完成挂载程序生成，挂载程序，启动主循环等功能
+
+        Args:
+            output_filename (str): 输出文件名
+            snoop_pid (int): 监控进程
+        """
         self.proc = psutil.Process(snoop_pid)
         self.interval = interval
         self.snoop_pid = snoop_pid
