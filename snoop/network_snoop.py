@@ -8,7 +8,8 @@ from struct import pack
 from time import sleep, strftime, time
 from subprocess import call
 from collections import namedtuple, defaultdict
-from utils import run_command_get_pid
+import psutil
+from utils import run_command_get_pid, run_command
 
 text = """
 #include <uapi/linux/ptrace.h>
@@ -85,7 +86,7 @@ class NetworkSnoop():
         for k, (send_bytes, recv_bytes) in sorted(throughput.items(),
                                                 key=lambda kv: sum(kv[1]),
                                                 reverse=True):
-            self.output_file.write("%.2f, %d, %.12s, %.2f, %.2f\n" % (
+            self.output_file.write("%.2f,%d,%.12s,%.2f,%.2f\n" % (
                 time_ticks,
                 k.pid,
                 k.name,
@@ -97,7 +98,7 @@ class NetworkSnoop():
             #     (recv_bytes / 1024), (send_bytes / 1024)))
 
     def main_loop(self):
-        self.output_file.write("%s, %s, %s, %s, %s\n" % ("TICKS",
+        self.output_file.write("%s,%s,%s,%s,%s\n" % ("TICKS",
         "PID", "COMM", "RX_KB", "TX_KB"))
         # while True:
         while True:
@@ -108,16 +109,27 @@ class NetworkSnoop():
                     self.output_file.close()
                 exit()
             self.record()
+            try:
+                status = self.proc.status()
+            except Exception:
+                self.output_file.write("END")
+                self.output_file.close()
+                exit()
+            if status == "zombie":
+                self.output_file.write("END")
+                self.output_file.close()
+                exit()
 
-    def run(self, interval, output_filename='net.csv', pid=None):
+    def run(self, interval, output_filename='net.csv', snoop_pid=None):
+        self.proc = psutil.Process(snoop_pid)
         self.interval = interval
-        self.snoop_pid = pid
+        self.snoop_pid = snoop_pid
         self.generate_program()
         self.attatch_probe()
         self.output_file = open(output_filename, "w")
         self.main_loop()
 
 if __name__=="__main__":
-    pid = run_command_get_pid("python3 udp.py")
+    proc = run_command("../test_examples/net")
     network_snoop = NetworkSnoop()
-    network_snoop.run(5, "net.csv", pid)
+    network_snoop.run(5, "net.csv", proc)

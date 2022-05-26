@@ -1,9 +1,6 @@
 #! /bin/python3
 from __future__ import print_function
-# from asyncio.windows_events import NULL
-# from curses.ascii import NUL
-# from py import process
-# from pyrfc3339 import generate
+import psutil
 from utils import pid_to_comm, run_command_get_pid, run_command
 from ctypes import c_uint
 import os
@@ -30,10 +27,13 @@ typedef struct process_info{
     char comm[TASK_COMM_LEN];
 }process_info;
 
-BPF_HASH(oncpu_start, u32, u64, MAX_PID);    // BPF_HASH(name [, key_type [, leaf_type [, size]]])
-BPF_HASH(offcpu_start, u32, u64, MAX_PID);   // BPF_HASH(name [, key_type [, leaf_type [, size]]])
-BPF_HASH(cpu_time, u32, process_cpu_time, MAX_PID);
+//BPF_HASH(oncpu_start, u32, u64, MAX_PID);    // BPF_HASH(name [, key_type [, leaf_type [, size]]])
+//BPF_HASH(offcpu_start, u32, u64, MAX_PID);   // BPF_HASH(name [, key_type [, leaf_type [, size]]])
+//BPF_HASH(cpu_time, u32, process_cpu_time, MAX_PID);
 
+BPF_HASH(oncpu_start, u32, u64);    // BPF_HASH(name [, key_type [, leaf_type [, size]]])
+BPF_HASH(offcpu_start, u32, u64);   // BPF_HASH(name [, key_type [, leaf_type [, size]]])
+BPF_HASH(cpu_time, u32, process_cpu_time);
 /*
 char* get_comm(u32 pid)
 {
@@ -307,9 +307,20 @@ class CPUSnoop:
             cur_time = time.time()
             self.record(process_cpu_time, (cur_time-prev_time)*1e3, cur_time)
             prev_time = cur_time
+            try:
+                status = self.proc.status()
+            except Exception:
+                self.output_file.write("END")
+                self.output_file.close()
+                exit()
+            if status == "zombie":
+                self.output_file.write("END")
+                self.output_file.close()
+                exit()
         return
     
     def run(self, interval, output_filename, snoop_pid):
+        self.proc = psutil.Process(snoop_pid)
         self.generate_program(snoop_pid=snoop_pid)
         self.attatch_probe()
         self.start_time = time.time()
@@ -326,7 +337,6 @@ class CPUSnoop:
 
 if __name__=="__main__":
     snoop = CPUSnoop()
-    pid = run_command_get_pid("../test_examples/cpu")
-    print(pid)
-    snoop.run(interval=20, output_filename="tmp.csv", snoop_pid=pid)
+    pid = run_command_get_pid("/home/li/repository/bcc_detector/OSdetector/test_examples/cpu")
+    snoop.run(interval=1, output_filename="tmp.csv", snoop_pid=pid)
 

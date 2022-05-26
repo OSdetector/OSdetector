@@ -1,4 +1,6 @@
+#! /bin/python3
 from bcc import BPF
+import psutil
 from utils import run_command_get_pid
 text = """
 #include <uapi/linux/ptrace.h>
@@ -9,6 +11,9 @@ enum output_type{
     ENTER,
     RETURN
 };
+
+#define SYSCALL_ID_EXIT 64
+#define SYSCALL_ID_EXIT_GROUP 231
 
 struct data_t{
     enum output_type type;
@@ -31,8 +36,6 @@ struct data_t{
 BPF_PERF_OUTPUT(enter_channel);
 BPF_PERF_OUTPUT(ret_channel);
 BPF_PERF_OUTPUT(event);
-
-
 
 TRACEPOINT_PROBE(raw_syscalls, sys_enter)
 {
@@ -57,14 +60,11 @@ TRACEPOINT_PROBE(raw_syscalls, sys_enter)
     data.ip = regs->ip;
     data.type = ENTER;
 
-    
     bpf_trace_printk("Enter %d %u\\n", 
                         data.syscall_id,
                         data.ret);
-    
-    // enter_channel.perf_submit(args, &data, sizeof(data));
-    //event.perf_submit(args, &data, sizeof(data));
-
+    if(data.syscall_id==SYSCALL_ID_EXIT || data.syscall_id==SYSCALL_ID_EXIT_GROUP)
+        bpf_trace_printk("END 0 0\\n");
     return 0;
 }
 
@@ -92,9 +92,6 @@ TRACEPOINT_PROBE(raw_syscalls, sys_exit)
     
     bpf_trace_printk("Leave %d %d\\n", 
                         data.syscall_id, data.ret);
-    
-    //ret_channel.perf_submit(args, &data, sizeof(data));
-    //event.perf_submit(args, &data, sizeof(data));
     return 0;
 }
 """
@@ -112,29 +109,46 @@ class SyscallSnoop():
         return  
 
     def record(self, task, pid, ts, msg):
+        if msg is None:
+            return
         msg = msg.split(b" ")
-        self.output_file.write("%-18.9f, %-16s, %-6d, %s, %s, %s\n" % (ts, task, pid, msg[0], msg[1], msg[2]))
+        self.output_file.write("%-18.9f,%-16s,%-6d,%s,%s,%s\n" % (ts, task, pid, msg[0], msg[1], msg[2]))
+        # print(("%-18.9f, %-16s, %-6d, %s, %s, %s\n" % (ts, task, pid, msg[0], msg[1], msg[2])))
         self.output_file.flush()
-
+        if(msg[0] == b'END'):
+            self.output_file.close()
+            exit()
     def main_loop(self):
         while 1:
+            # print("1")
             try:
-                (task, pid, cpu, flags, ts, msg) = self.bpf.trace_fields()
+                (task, pid, cpu, flags, ts, msg) = self.bpf.trace_fields(nonblocking=False)
             except KeyboardInterrupt:
                 if not self.output_file.closed:
                     self.output_file.close()
                 continue
             self.record(task, pid, ts, msg)
+            # try:
+            #     status = self.proc.status()
+            # except Exception:
+            #     self.output_file.write("END")
+            #     self.output_file.close()
+            #     exit()
+            # if status == "zombie":
+            #     self.output_file.write("END")
+            #     self.output_file.close()
+            #     exit()
 
     def run(self, output_filename, snoop_pid):
+        self.proc = psutil.Process(snoop_pid)
         self.generate_program(snoop_pid)
         self.attatch_probe()
         self.output_file = open(output_filename, "w")
-        self.output_file.write("TICKS, COMM, PID, ACTION, SYSCALL_IP, RET\n")
+        self.output_file.write("TICKS,COMM,PID,ACTION,SYSCALL_ID,RET\n")
         self.main_loop()
 
 
 if __name__=="__main__":
-    snoop = syscall_snoop()
-    pid = run_command_get_pid("python3 tcp.py")
+    snoop = SyscallSnoop()
+    pid = run_command_get_pid("../test_examples/mem")
     snoop.run(output_filename="tmp.csv", snoop_pid=pid)

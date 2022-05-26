@@ -1,11 +1,8 @@
 #! /bin/python3
-# import threading
 import multiprocessing as mp
 from time import sleep, strftime, time
 import argparse
-
 from yaml import parse
-
 from cpu_snoop import CPUSnoop
 from mem_snoop import MEMSnoop
 from network_snoop import NetworkSnoop
@@ -14,7 +11,12 @@ from utils import run_command
 import subprocess
 
 # TODO:添加'-h'选项下的使用示例
-examples=""
+examples="""
+EXAMPLES:
+    ./top_snoop -c './snoop_program' # Run the program snoop_program and snoop its resource usage
+    ./top_snoop -p 12345  # Snoop the process with pid 12345
+    ./top_snoop -p 12345 -i 1  # Snoop the process with pid 12345 and output every 1 second
+    """
 
 class TOPSnoop():
     def __init__(self) -> None:
@@ -60,6 +62,7 @@ class TOPSnoop():
         mem_snoop_process.start()
         net_snoop_process.start()
         syscall_snoop_process.start()
+
 
 if __name__=="__main__":
     top_snoop = TOPSnoop()
