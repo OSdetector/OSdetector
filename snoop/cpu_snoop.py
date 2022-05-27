@@ -29,19 +29,22 @@ BPF_HASH(cpu_time, u32, process_cpu_time);
 // 记录ON-CPU的开始时间
 static inline void store_oncpu_start(u32 tgid, u32 pid, u64 ts)
 {
-    oncpu_start.update(&pid, &ts);
+    // oncpu_start.update(&pid, &ts);
+    oncpu_start.update(&tgid, &ts);
 }
 
 // 记录OFF-CPU的开始时间
 static inline void store_offcpu_start(u32 tgid, u32 pid, u64 ts)
 {
-    offcpu_start.update(&pid, &ts);
+    //offcpu_start.update(&pid, &ts);
+    offcpu_start.update(&tgid, &ts);
 }
 
 // 更新ON-CPU的持续时间
 static inline void update_oncpu_time(u32 tgid, u32 pid, u64 ts)
 {
-    u64 *tsp = oncpu_start.lookup(&pid);
+    //u64 *tsp = oncpu_start.lookup(&pid);
+    u64 *tsp = oncpu_start.lookup(&tgid);
     if (tsp == 0)
         return;
     
@@ -49,21 +52,24 @@ static inline void update_oncpu_time(u32 tgid, u32 pid, u64 ts)
         return;
     
     u64 delta = ts - *tsp;
-    process_cpu_time* p = cpu_time.lookup(&pid);
+    //process_cpu_time* p = cpu_time.lookup(&pid);
+    process_cpu_time* p = cpu_time.lookup(&tgid);
 
     if(p != NULL)
         p->oncpu_time+=delta;
     else
     {
         process_cpu_time init = {0, 0};
-        cpu_time.update(&pid, &init);
+        //cpu_time.update(&pid, &init);
+        cpu_time.update(&tgid, &init); 
     }
 }
 
 // 更新OFF-CPU的持续时间
 static inline void update_offcpu_time(u32 tgid, u32 pid, u64 ts)
 {
-    u64 *tsp = offcpu_start.lookup(&pid);
+    //u64 *tsp = offcpu_start.lookup(&pid);
+    u64 *tsp = offcpu_start.lookup(&tgid);
 
     if (tsp == 0)
         return;
@@ -72,13 +78,15 @@ static inline void update_offcpu_time(u32 tgid, u32 pid, u64 ts)
         return;
     
     u64 delta = ts - *tsp;
-    process_cpu_time* p = cpu_time.lookup(&pid);
+    //process_cpu_time* p = cpu_time.lookup(&pid);
+    process_cpu_time* p = cpu_time.lookup(&tgid);
     if(p != NULL)
         p->offcpu_time+=delta;
     else
     {
         process_cpu_time init = {0, 0};
-        cpu_time.update(&pid, &init);
+        //cpu_time.update(&pid, &init);
+        cpu_time.update(&tgid, &init);
     }
     //offcpu_time.increment(pid, delta);
     //offcpu_time.update(&pid, &delta);
@@ -96,7 +104,8 @@ int sched_switch(struct pt_regs *ctx, struct task_struct *prev)
 
     
     //更新之前进程的on-cpu时长并记录off-cpu的开始
-    PREV_PID_FILTER
+    //PREV_PID_FILTER
+    PREV_TGID_FILTER    // 增加对多线程程序的支持
     {
         update_oncpu_time(prev_tgid, prev_pid, ts);
         store_offcpu_start(prev_tgid, prev_pid, ts);
@@ -104,7 +113,8 @@ int sched_switch(struct pt_regs *ctx, struct task_struct *prev)
 
 BAIL:
     // 记录当前进程的on-cpu开始并更新off-cpu的时长
-    PID_FILTER
+    //PID_FILTER
+    TGID_FILTER          // 增加对多线程程序的支持
     {    
         update_offcpu_time(tgid, pid, ts);
         store_oncpu_start(tgid, pid, ts);
@@ -141,6 +151,10 @@ class CPUSnoop:
                 "if(prev_pid==%d)" % snoop_pid)
         self.prg = self.prg.replace("PID_FILTER", 
                 "if(pid==%d)" % snoop_pid)
+        self.prg = self.prg.replace("PREV_TGID_FILTER",
+                "if(prev_tgid==%d)" % snoop_pid)
+        self.prg = self.prg.replace("TGID_FILTER", 
+                "if(tgid==%d)" % snoop_pid)
         return
 
     def attatch_probe(self):
@@ -230,5 +244,4 @@ class CPUSnoop:
 if __name__=="__main__":
     snoop = CPUSnoop()
     pid = run_command_get_pid("/home/li/repository/bcc_detector/OSdetector/test_examples/cpu")
-    snoop.run(interval=1, output_filename="tmp.csv", snoop_pid=pid)
-
+    snoop.run(interval=20, output_filename="tmp.csv", snoop_pid=pid)
