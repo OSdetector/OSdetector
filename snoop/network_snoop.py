@@ -27,21 +27,27 @@ BPF_HASH(recv_bytes, struct throughput_key_t);
 TRACEPOINT_PROBE(net, net_dev_queue)
 {
     u32 pid = bpf_get_current_pid_tgid() >> 32;
-    FILTER_PID
+    u32 tgid = bpf_get_current_pid_tgid();
+    PID_FILTER
+    TGID_FILTER
     struct throughput_key_t throughput_key = {.pid = pid};
     bpf_get_current_comm(&throughput_key.name, sizeof(throughput_key.name));
 
     send_bytes.increment(throughput_key, args->len);
+    return 0;
 }
 // 挂载到接收函数
 TRACEPOINT_PROBE(net, netif_receive_skb)
 {
     u32 pid = bpf_get_current_pid_tgid() >> 32;
-    FILTER_PID
+    u32 tgid = bpf_get_current_pid_tgid();
+    PID_FILTER
+    TGID_FILTER
     struct throughput_key_t throughput_key = {.pid = pid};
     bpf_get_current_comm(&throughput_key.name, sizeof(throughput_key.name));
 
     recv_bytes.increment(throughput_key, args->len);
+    return 0;
 }
 """
 ThroughputKey = namedtuple('Throughput', ['pid', 'name'])
@@ -52,15 +58,21 @@ class NetworkSnoop():
     def __init__(self) -> None:
         return
 
-    def generate_program(self):
+    def generate_program(self, snoop_one_thread=False):
         """生成挂载函数，主要替换监控进程PID与监控协议族
         """
         self.prg = text
         if self.snoop_pid is not None:
-            self.prg = self.prg.replace('FILTER_PID',
-                'if (pid != %s) { return 0; }' % self.snoop_pid)
+            if snoop_one_thread == True:
+                self.prg = self.prg.replace('PID_FILTER',
+                    'if (pid != %s) { return 0; }' % self.snoop_pid)
+                self.prg = self.prg.replace("TGID_FILTER", "")
+            else:
+                self.prg = self.prg.replace('TGID_FILTER',
+                    'if (tgid != %s) { return 0; }' % self.snoop_pid)
+                self.prg = self.prg.replace("PID_FILTER", "")
         else:
-            self.prg = self.prg.replace('FILTER_PID', '')
+            self.prg = self.prg.replace('PID_FILTER', '')
         self.prg = self.prg.replace('FILTER_FAMILY', '')
         class tmp():
             cgroupmap = None
@@ -142,6 +154,6 @@ class NetworkSnoop():
         self.main_loop()
 
 if __name__=="__main__":
-    proc = run_command("../test_examples/net")
+    pid = run_command_get_pid("../test_examples/net")
     network_snoop = NetworkSnoop()
-    network_snoop.run(5, "net.csv", proc)
+    network_snoop.run(5, "net.csv", pid)

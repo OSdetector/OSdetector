@@ -39,7 +39,7 @@ class TOPSnoop():
             help="id of the process to trace (optional)")
         parser.add_argument("-c", "--command",
             help="execute and trace the specified command (optional)")
-        parser.add_argument("-i", "--interval", type=int, default=15,
+        parser.add_argument("-i", "--interval", type=int, default=20,
             help="The interval of snoop (unit:s)")
         args = parser.parse_args()
         if args.command is not None:

@@ -40,9 +40,13 @@ TRACEPOINT_PROBE(raw_syscalls, sys_enter)
 {
     struct data_t data = {0};
 
-    data.pid = bpf_get_current_pid_tgid() >> 32;   // bpf_get_current_pid_tgid返回值为u64：pid+tgid
-    if(data.pid != SNOOP_PID)
-        return 0;
+    u32 pid = bpf_get_current_pid_tgid() >> 32;
+    u32 tgid = bpf_get_current_pid_tgid();
+
+    PID_FILTER
+    TGID_FILTER
+
+    data.pid = pid;
     data.ts = bpf_ktime_get_ns();
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
 
@@ -77,10 +81,13 @@ TRACEPOINT_PROBE(raw_syscalls, sys_enter)
 TRACEPOINT_PROBE(raw_syscalls, sys_exit)
 {
     struct data_t data = {0};
-    data.pid = bpf_get_current_pid_tgid() >> 32;
+    u32 pid = bpf_get_current_pid_tgid() >> 32;
+    u32 tgid = bpf_get_current_pid_tgid();
 
-    if(data.pid != SNOOP_PID)
-        return 0;
+    PID_FILTER
+    TGID_FILTER
+
+    data.pid = pid;
     bpf_get_current_comm(&data.comm, sizeof(data.comm));     // bpf_get_current_pid_tgid返回值为u64：pid+tgid
     data.ts = bpf_ktime_get_ns();
     data.syscall_id = args->id;
@@ -110,13 +117,19 @@ class SyscallSnoop():
     def __init__(self) -> None:
         self.prg = text
     
-    def generate_program(self, snoop_pid):
+    def generate_program(self, snoop_pid, snoop_one_thread=False):
         """生成挂在程序，主要是替换监控的PID
 
         Args:
             snoop_pid (int): 监控进程的PID
         """
-        self.prg = self.prg.replace("SNOOP_PID", str(snoop_pid))
+
+        if snoop_one_thread==True:
+            self.prg = self.prg.replace("PID_FILTER", "if(pid==%d) return 0;" % snoop_pid)
+            self.prg = self.prg.replace("TGID_FILTER", "")
+        else:
+            self.prg = self.prg.replace("TGID_FILTER", "if(tgid==%d) return 0;" % snoop_pid)
+            self.prg = self.prg.replace("PID_FILTER", "")
         return
 
     def attatch_probe(self):
@@ -156,7 +169,7 @@ class SyscallSnoop():
             except KeyboardInterrupt:
                 if not self.output_file.closed:
                     self.output_file.close()
-                continue
+                exit()
             self.record(task, pid, ts, msg)
 
     def run(self, output_filename, snoop_pid):
