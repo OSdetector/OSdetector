@@ -25,6 +25,7 @@ typedef struct process_cpu_time{
 BPF_HASH(oncpu_start, u32, u64);    // BPF_HASH(name [, key_type [, leaf_type [, size]]])
 BPF_HASH(offcpu_start, u32, u64);   // BPF_HASH(name [, key_type [, leaf_type [, size]]])
 BPF_HASH(cpu_time, u32, process_cpu_time);
+BPF_HASH(snoop_proc, u32, u8);     // tgid->TRUE/FALSE
 
 // 记录ON-CPU的开始时间
 static inline void store_oncpu_start(u32 tgid, u32 pid, u64 ts)
@@ -92,6 +93,26 @@ static inline void update_offcpu_time(u32 tgid, u32 pid, u64 ts)
     //offcpu_time.update(&pid, &delta);
 }
 
+// 检查tgid是否是监控进程
+// (1) 检查tgid是否在snoop_proc中
+// (2) 检查tgid是否是snoop_proc的子进程
+static inline int lookup_tgid(u32 tgid)
+{
+     if(snoop_proc.lookup(&tgid) != NULL)
+        return 1;
+     u8 TRUE = 1;
+     struct task_struct * task = (struct task_struct *)bpf_get_current_task();
+     u32 ppid = task->real_parent->tgid;
+     u32 task_tgid = task->tgid;
+     if(snoop_proc.lookup(&ppid) != NULL)
+     {
+        snoop_proc.insert(&tgid, &TRUE);
+        bpf_trace_printk("Add new snoop proc, task_tgid=%d, tgid=%d, ppid=%d\\n", task_tgid, tgid, ppid);
+        return 1;
+     }
+     return 0;
+}
+
 // 挂载到内核函数的具体事件
 int sched_switch(struct pt_regs *ctx, struct task_struct *prev)
 {
@@ -102,10 +123,17 @@ int sched_switch(struct pt_regs *ctx, struct task_struct *prev)
     u32 prev_pid = prev->pid;
     u32 prev_tgid = prev->tgid;
 
+    u32 origin_tgid = SNOOP_PID;
+    u8 TRUE = 1;
+    snoop_proc.lookup_or_try_init(&origin_tgid, &TRUE);
+
     
     //更新之前进程的on-cpu时长并记录off-cpu的开始
     //PREV_PID_FILTER
-    PREV_TGID_FILTER    // 增加对多线程程序的支持
+    //PREV_TGID_FILTER    // 增加对多线程程序的支持
+
+    // 因为finish_task_switch执行时task结构体已经切换为当前进程，此时无法获取前一个进程的ppid，所以只检查进程是否在snoop_proc中
+    if(snoop_proc.lookup(&prev_tgid) != NULL)    
     {
         update_oncpu_time(prev_tgid, prev_pid, ts);
         store_offcpu_start(prev_tgid, prev_pid, ts);
@@ -114,7 +142,8 @@ int sched_switch(struct pt_regs *ctx, struct task_struct *prev)
 BAIL:
     // 记录当前进程的on-cpu开始并更新off-cpu的时长
     //PID_FILTER
-    TGID_FILTER          // 增加对多线程程序的支持
+    //TGID_FILTER          // 增加对多线程程序的支持
+    if(lookup_tgid(tgid))
     {    
         update_offcpu_time(tgid, pid, ts);
         store_oncpu_start(tgid, pid, ts);
@@ -129,9 +158,10 @@ int clear_proc_time(struct pt_regs *ctx)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 tgid = pid_tgid >> 32, pid = pid_tgid;
 
-    oncpu_start.delete(&pid);
-    offcpu_start.delete(&pid);
-    cpu_time.delete(&pid);
+    oncpu_start.delete(&tgid);
+    offcpu_start.delete(&tgid);
+    cpu_time.delete(&tgid);
+    snoop_proc.delete(&tgid);
 
     return 0;
 }
@@ -155,6 +185,7 @@ class CPUSnoop:
                 "if(prev_tgid==%d)" % snoop_pid)
         self.prg = self.prg.replace("TGID_FILTER", 
                 "if(tgid==%d)" % snoop_pid)
+        self.prg = self.prg.replace("SNOOP_PID", str(snoop_pid))
         return
 
     def attatch_probe(self):
@@ -163,7 +194,7 @@ class CPUSnoop:
         max_pid = int(open("/proc/sys/kernel/pid_max").read())
         self.bpf = BPF(text=self.prg, cflags=["-DMAX_PID=%d" % max_pid])
         self.bpf.attach_kprobe(event_re="^finish_task_switch$", fn_name="sched_switch")
-        # self.bpf.attach_tracepoint("sys_exit_*", "clear_proc_time")
+        self.bpf.attach_tracepoint("sys_exit_*", "clear_proc_time")
 
         return
 
@@ -174,7 +205,8 @@ class CPUSnoop:
             period (float): 两次调用record之间的时间间隔
             time_stamp (float): 当前时间时间戳
         """
-        for k, v in sorted(self.bpf['cpu_time'].items_lookup_and_delete_batch(), key=lambda kv: (kv[1].oncpu_time), reverse=True):
+        # for k, v in sorted(self.bpf['cpu_time'].items_lookup_and_delete_batch(), key=lambda kv: (kv[1].oncpu_time), reverse=True):
+        for k, v in sorted(self.bpf['cpu_time'].items_lookup_and_delete_batch(), key=lambda kv: (kv[0]), reverse=False):
             comm = pid_to_comm(k).strip('\n')
             oncpu_time_ms = v.oncpu_time / 1e6   # eBPF虚拟机以ns为单位记录
             offcpu_time_ms = period - oncpu_time_ms
@@ -243,5 +275,5 @@ class CPUSnoop:
 
 if __name__=="__main__":
     snoop = CPUSnoop()
-    pid = run_command_get_pid("/home/li/repository/bcc_detector/OSdetector/test_examples/cpu")
-    snoop.run(interval=20, output_filename="tmp.csv", snoop_pid=pid)
+    pid = run_command_get_pid("/home/li/repository/bcc_detector/OSdetector/test_examples/fork")
+    snoop.run(interval=3, output_filename="tmp.csv", snoop_pid=pid)
