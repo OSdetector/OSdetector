@@ -1,15 +1,8 @@
 #! /bin/python3
 from __future__ import print_function
 import psutil
-from utils import pid_to_comm, run_command_get_pid, run_command
-from ctypes import c_uint
-import os
-from os import times
+from utils import pid_to_comm, run_command_get_pid
 from bcc import BPF
-from time import sleep, strftime, time
-import argparse
-from collections import namedtuple, defaultdict
-import subprocess
 import time
 
 text = """
@@ -107,7 +100,7 @@ static inline int lookup_tgid(u32 tgid)
      if(snoop_proc.lookup(&ppid) != NULL)
      {
         snoop_proc.insert(&tgid, &TRUE);
-        bpf_trace_printk("Add new snoop proc, task_tgid=%d, tgid=%d, ppid=%d\\n", task_tgid, tgid, ppid);
+        //bpf_trace_printk("Add new snoop proc, task_tgid=%d, tgid=%d, ppid=%d\\n", task_tgid, tgid, ppid);
         return 1;
      }
      return 0;
@@ -231,7 +224,7 @@ class CPUSnoop:
         prev_time = self.start_time
         while True:
             try:
-                sleep(interval)
+                time.sleep(interval)
             except KeyboardInterrupt:
                 print("receive KeyBoardInterrupt")
                 if not self.output_file.closed:
@@ -273,7 +266,12 @@ class CPUSnoop:
                                 % ("TICKS", "PID", "COMM", "ON CPU(ms)", "OFF CPU(ms)", "CPU%"))
         self.main_loop(interval)
 
-if __name__=="__main__":
+def main(interval, output_filename, snoop_pid):
     snoop = CPUSnoop()
-    pid = run_command_get_pid("/home/li/repository/bcc_detector/OSdetector/test_examples/fork")
-    snoop.run(interval=3, output_filename="tmp.csv", snoop_pid=pid)
+    snoop.run(interval, output_filename, snoop_pid)
+
+
+
+if __name__=="__main__":
+    pid = run_command_get_pid("/home/li/repository/bcc_detector/OSdetector/test_examples/cpu")
+    main(interval=3, output_filename="cpu.csv", snoop_pid=pid)

@@ -156,7 +156,7 @@ class SyscallSnoop():
             except KeyboardInterrupt:
                 if not self.output_file.closed:
                     self.output_file.close()
-                continue
+                exit()
             self.record(task, pid, ts, msg)
 
     def run(self, output_filename, snoop_pid):
