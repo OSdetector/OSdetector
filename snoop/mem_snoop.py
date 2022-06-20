@@ -1,19 +1,14 @@
 #! /bin/python3
 from bcc import BPF
-from time import sleep
-from datetime import datetime
-import resource
-import argparse
-import subprocess
-import os
-import sys
 import time
 import psutil
-
-from utils import run_command_get_pid, run_command
+from utils import run_command_get_pid
 
 text="""
 #include <uapi/linux/ptrace.h>
+#include <linux/sched.h>
+
+
 // 记录单次内存分配的数据结构
 struct alloc_info_t {
         u64 size;
@@ -31,6 +26,7 @@ BPF_HASH(allocs, u64, struct alloc_info_t, 1000000);   // 记录每次分配的�
 BPF_HASH(memptrs, u64, u64);
 BPF_STACK_TRACE(stack_traces, 10240);
 BPF_HASH(combined_allocs, u32, struct combined_alloc_info_t, 10240);
+BPF_HASH(snoop_proc, u32, u8);
 
 // 更新某个进程栈的空间大小
 static inline void update_statistics_add(u32 pid, u64 sz) {
@@ -65,12 +61,29 @@ static inline void update_statistics_del(u32 pid, u64 sz) {
 
         combined_allocs.update(&pid, &cinfo);
 }
+
+static inline int lookup_tgid(u32 tgid)
+{
+     if(snoop_proc.lookup(&tgid) != NULL)
+        return 1;
+     u8 TRUE = 1;
+     struct task_struct * task = (struct task_struct *)bpf_get_current_task();
+     u32 ppid = task->real_parent->tgid;
+     u32 task_tgid = task->tgid;
+     if(snoop_proc.lookup(&ppid) != NULL)
+     {
+        snoop_proc.insert(&tgid, &TRUE);
+        bpf_trace_printk("Add new snoop proc, task_tgid=%d, tgid=%d, ppid=%d\\n", task_tgid, tgid, ppid);
+        return 1;
+     }
+     return 0;
+}
+
 // 内存申请挂载函数，挂载在函数入口获得内存申请大小
 static inline int gen_alloc_enter(struct pt_regs *ctx, size_t size) {
         u64 pid = bpf_get_current_pid_tgid();
         u64 size64 = size;
         sizes.update(&pid, &size64);
-
         return 0;
 }
 // 内存申请挂载函数，挂载在函数返回处更新内存信息
@@ -81,6 +94,13 @@ static inline int gen_alloc_exit2(struct pt_regs *ctx, u64 address) {
 
         if (size64 == 0)
                 return 0; // missed alloc entry
+        u32 tgid = pid_tgid>>32;
+        // 检查是否为监控进程
+        u32 origin_tgid = SNOOP_PID;
+        u8 TRUE = 1;
+        snoop_proc.lookup_or_try_init(&origin_tgid, &TRUE);
+        if(lookup_tgid(tgid) == 0)
+                return 0;
 
         info.size = *size64;
         sizes.delete(&pid_tgid);
@@ -220,6 +240,8 @@ int clear_mem(struct pt_regs *ctx)
 
         combined_allocs.update(&pid, &cinfo);
 
+        snoop_proc.delete(&tgid);
+
     return 0;
 }
 """
@@ -232,9 +254,10 @@ class MEMSnoop():
         """生成挂载程序，主要是修改监控进程PID
         """
         self.prg = self.prg.replace("PID_FILTER", "if(pid!=%d) return" % self.snoop_pid)
+        self.prg = self.prg.replace("SNOOP_PID", str(self.snoop_pid))
         self.bpf = BPF(text=self.prg)
 
-
+ 
     def attatch_probe(self, obj="c"):
         """将挂载函数挂载到对应的挂载点上
 
@@ -249,11 +272,9 @@ class MEMSnoop():
 
                 try:
                         self.bpf.attach_uprobe(name=obj, sym=sym,
-                                          fn_name=fn_prefix + "_enter",
-                                          pid=self.snoop_pid)
+                                          fn_name=fn_prefix + "_enter")
                         self.bpf.attach_uretprobe(name=obj, sym=sym,
-                                             fn_name=fn_prefix + "_exit",
-                                             pid=self.snoop_pid)
+                                             fn_name=fn_prefix + "_exit")
                 except Exception:
                         if can_fail:
                                 return
@@ -270,8 +291,7 @@ class MEMSnoop():
         attach_probes("pvalloc", can_fail=True) # failed on Android, is deprecated in libc.so from bionic directory
         attach_probes("aligned_alloc", can_fail=True)  # added in C11
         # 挂载free函数释放内存
-        self.bpf.attach_uprobe(name=obj, sym="free", fn_name="free_enter",
-                                  pid=self.snoop_pid)
+        self.bpf.attach_uprobe(name=obj, sym="free", fn_name="free_enter")
         self.bpf.attach_tracepoint("syscalls:sys_enter_kill", "clear_mem")
 
     def record(self):
@@ -280,8 +300,9 @@ class MEMSnoop():
         stacks = sorted(self.bpf["combined_allocs"].items(),
                         key=lambda a: -a[1].total_size)
         cur_time = time.time()
-        for pid, info in stacks:
-                self.output_file.write("%.2f,%d,%d\n" % (cur_time, info.total_size, info.number_of_allocs))
+        for key, info in sorted(self.bpf["combined_allocs"].items(), key=lambda k: k[0].value):
+                # BCC使用items()获取表中内容返回的k为c_uint8对象，需要使用value获取值
+                self.output_file.write("%.2f,%12d,%d,%d\n" % (cur_time, key.value, info.total_size, info.number_of_allocs))    
                 # print("%.2f, %d, %d\n" % (cur_time, info.total_size, info.number_of_allocs), pid)
 
         self.output_file.flush()
@@ -291,10 +312,10 @@ class MEMSnoop():
         主循环体，持续等待eBPF虚拟机传来消息，调用
         record进行输出
         """
-        self.output_file.write("%s,%s,%s\n" % ("ticks", "size(B)", "times"))
+        self.output_file.write("%s,%s,%s,%s\n" % ("ticks", "PID", "size(B)", "times"))
         while True:
             try:
-                    sleep(interval)
+                    time.sleep(interval)
             except KeyboardInterrupt:
                     if not self.output_file.closed:
                             self.output_file.close()
@@ -329,6 +350,6 @@ class MEMSnoop():
 
 if __name__=="__main__":
     mem_snoop = MEMSnoop()
-    pid = run_command_get_pid("../test_examples/mem")
-    mem_snoop.run(5, "mem.csv", pid)
+    pid = run_command_get_pid("../test_examples/fork")
+    mem_snoop.run(5, "mem_new.csv", 2574335)
 

@@ -2,14 +2,10 @@
 from __future__ import print_function
 from bcc import BPF
 from bcc.containers import filter_by_containers
-import argparse
-from socket import inet_ntop, AF_INET, AF_INET6
-from struct import pack
-from time import sleep, strftime, time
-from subprocess import call
+from time import sleep, time
 from collections import namedtuple, defaultdict
 import psutil
-from utils import run_command_get_pid, run_command
+from utils import run_command_get_pid
 
 text = """
 #include <uapi/linux/ptrace.h>
@@ -22,31 +18,60 @@ struct throughput_key_t {
 };
 BPF_HASH(send_bytes, struct throughput_key_t);
 BPF_HASH(recv_bytes, struct throughput_key_t);
+BPF_HASH(snoop_proc, u32, u8);
+
+static inline int lookup_tgid(u32 tgid)
+{
+     if(snoop_proc.lookup(&tgid) != NULL)
+        return 1;
+     u8 TRUE = 1;
+     struct task_struct * task = (struct task_struct *)bpf_get_current_task();
+     u32 ppid = task->real_parent->tgid;
+     u32 task_tgid = task->tgid;
+     bpf_trace_printk("Add new snoop proc, task_tgid=%d, tgid=%d, ppid=%d\\n", task_tgid, tgid, ppid);
+     if(snoop_proc.lookup(&ppid) != NULL)
+     {
+        snoop_proc.insert(&tgid, &TRUE);
+        bpf_trace_printk("Add new snoop proc, task_tgid=%d, tgid=%d, ppid=%d\\n", task_tgid, tgid, ppid);
+        return 1;
+     }
+     return 0;
+}
 
 // 挂载到ip向数据链路层传送数据包处
 TRACEPOINT_PROBE(net, net_dev_queue)
 {
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
-    u32 tgid = bpf_get_current_pid_tgid();
-    PID_FILTER
-    TGID_FILTER
-    struct throughput_key_t throughput_key = {.pid = pid};
+    u32 tgid = bpf_get_current_pid_tgid() >> 32;
+    //FILTER_PID
+    // 检查是否为监控进程
+    u32 origin_tgid = SNOOP_PID;
+    u8 TRUE = 1;
+    snoop_proc.lookup_or_try_init(&origin_tgid, &TRUE);
+    if(lookup_tgid(tgid) == 0)
+            return 0;
+    struct throughput_key_t throughput_key = {.pid = tgid};
     bpf_get_current_comm(&throughput_key.name, sizeof(throughput_key.name));
 
     send_bytes.increment(throughput_key, args->len);
+    
     return 0;
 }
 // 挂载到接收函数
 TRACEPOINT_PROBE(net, netif_receive_skb)
 {
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
-    u32 tgid = bpf_get_current_pid_tgid();
-    PID_FILTER
-    TGID_FILTER
-    struct throughput_key_t throughput_key = {.pid = pid};
+    u32 tgid = bpf_get_current_pid_tgid() >> 32;
+    //FILTER_PID
+    // 检查是否为监控进程
+    u32 origin_tgid = SNOOP_PID;
+    u8 TRUE = 1;
+    snoop_proc.lookup_or_try_init(&origin_tgid, &TRUE);
+    if(lookup_tgid(tgid) == 0)
+            return 0;
+    struct throughput_key_t throughput_key = {.pid = tgid};
     bpf_get_current_comm(&throughput_key.name, sizeof(throughput_key.name));
 
     recv_bytes.increment(throughput_key, args->len);
+
     return 0;
 }
 """
@@ -74,6 +99,7 @@ class NetworkSnoop():
         else:
             self.prg = self.prg.replace('PID_FILTER', '')
         self.prg = self.prg.replace('FILTER_FAMILY', '')
+        self.prg = self.prg.replace("SNOOP_PID", str(self.snoop_pid))
         class tmp():
             cgroupmap = None
             mntnsmap = None
@@ -109,6 +135,7 @@ class NetworkSnoop():
                 k.pid,
                 k.name,
                 (recv_bytes / 1024), (send_bytes / 1024)))
+        self.output_file.flush()
 
     def main_loop(self):        
         """
@@ -116,7 +143,7 @@ class NetworkSnoop():
         record进行输出
         """
         self.output_file.write("%s,%s,%s,%s,%s\n" % ("TICKS",
-        "PID", "COMM", "RX_KB", "TX_KB"))
+            "PID", "COMM", "RX_KB", "TX_KB"))
         while True:
             try:
                 sleep(self.interval)
@@ -155,5 +182,6 @@ class NetworkSnoop():
 
 if __name__=="__main__":
     pid = run_command_get_pid("../test_examples/net")
+    print(pid)
     network_snoop = NetworkSnoop()
     network_snoop.run(5, "net.csv", pid)
