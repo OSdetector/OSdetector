@@ -1,0 +1,17 @@
+{
+    "snoop_cpu": "stat",   
+    "cpu_output_file": "cpu.csv",
+    "snoop_mem": "bcc",
+    "mem_output_file": "mem.csv",
+    "memleak_probes":{
+        "probes":["./mem_example/main:func1"],
+        "output_file":"tmp.csv",
+        "additional_var": "int parm1, char [10] parm2"
+    },
+    "snoop_network": null,
+    "network_output_file": "net.csv",
+    "snoop_syscall": null,
+    "syscall_output_file": "syscall.csv",
+    "interval": 1,
+    "trace_multiprocess": "true"
+}

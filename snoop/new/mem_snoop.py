@@ -220,6 +220,29 @@ static inline int clear_mem(struct pt_regs *ctx)
 
         return 0;
 }
+//BPF_STACK_TRACE(stack_traces, 10240);
+/*int uprobe_output(struct pt_regs *ctx)
+{
+        u32 tgid = bpf_get_current_pid_tgid()>>32;
+        struct combined_alloc_info_t* info = combined_allocs.lookup(&tgid);
+        char str[100];
+        stack_traces.get_stackid(ctx, BPF_F_USER_STACK);
+        int success = bpf_probe_read_user(str, 100*sizeof(char), (void *)PT_REGS_PARM2(ctx));
+        if(success != 0)
+                bpf_trace_printk("Fail to read user\\n");
+        if(info != NULL)
+                bpf_trace_printk("PARM:%d, %d, %s\\n", PT_REGS_PARM1(ctx), PT_REGS_PARM2(ctx), str);
+        return 0;
+}
+
+int uretprobe_output(struct pt_regs *ctx)
+{
+        u32 tgid = bpf_get_current_pid_tgid()>>32;
+        struct combined_alloc_info_t* info = combined_allocs.lookup(&tgid);
+        if(info != NULL)
+                bpf_trace_printk("Size:%d, nums:%d\\n", info->total_size, info->number_of_allocs);
+        return 0;
+}*/
 """
 
 def mem_attach_probe(bpf_obj):
@@ -251,6 +274,11 @@ def mem_attach_probe(bpf_obj):
         # 挂载free函数释放内存
         bpf_obj.attach_uprobe(name=obj, sym="free", fn_name="free_enter")
         # bpf_obj.attach_tracepoint("syscalls:sys_enter_kill", "clear_mem")
+
+        # test uprobe
+        # bpf_obj.attach_uprobe(name="./mem_example/main", sym_re="func3", fn_name="uprobe_output")
+        # bpf_obj.attach_uretprobe(name="./mem_example/main", sym_re="func3", fn_name="uretprobe_output")
+
 
 
 def mem_record(output_file, cur_time, bpf_obj):

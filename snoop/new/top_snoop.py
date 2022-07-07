@@ -94,11 +94,13 @@ def main_loop(configure, output_fp, bpf_obj):
                 if configure["snoop_cpu"] == "bcc":
                     cpu_record(output_fp['cpu'],(cur_time-prev_time)*1e3, cur_time, bpf_obj)
                 elif configure["snoop_cpu"] == "stat":
-                    usage = cpu_stat_record(output_fp['cpu'], cur_time, configure["snoop_pid"], usage)
+                    usage = cpu_stat_record(output_fp['cpu'], cur_time, cur_time-prev_time, configure["snoop_pid"], usage)
                 elif configure["snoop_cpu"] == "top":
                     cpu_top_record(output_file=output_fp["cpu"], cur_time=cur_time, snoop_pid=configure["snoop_pid"])
                 if configure["snoop_mem"] == "bcc":
                     mem_record(output_fp["mem"], cur_time, bpf_obj)
+                    if not configure['memleak_probes'] is None:
+                        memleak_record(output_fp["memleak"], bpf_obj)
                 if configure["snoop_network"] == "bcc":
                     network_record(output_fp["network"], cur_time, bpf_obj)
                 if configure["snoop_syscall"] == "bcc":
@@ -142,7 +144,7 @@ def parse_args():
             help="execute and trace the specified command (optional)")
         parser.add_argument("-i", "--interval", type=int, default=3,
             help="The interval of snoop (unit:s)")
-        parser.add_argument("--configure_file", help="File name of the configure, ignore other args.")
+        parser.add_argument("--configure_file", help="File name of the configure.")
         args = parser.parse_args()
         if args.configure_file is not None:
             configure = read_configure(args.configure_file)
@@ -164,20 +166,98 @@ def parse_args():
             print("Please specify the pid or command!")
             exit()
             
-        print_configure(configure)
+        check_configure(configure)
 
         return configure
+
+def check_configure(configure):
+    snoop_cpu_options = ["bcc", "stat", "top"]
+    try:
+        if configure["snoop_cpu"] in snoop_cpu_options:
+            if configure["cpu_output_file"] is None:
+                print("ERROR: You must specific the output file for cpu snoop!\n")
+                exit()
+        elif configure["snoop_cpu"] is None:
+            if not configure["cpu_output_file"] is None:
+                print("WARNING: The output file for cpu snoop will be invalid since you didn't specific the cpu_snoop option!\n")
+        else:
+            print("ERROR: Invalid option for cpu_snoop, please check your configure file!\n")
+            exit()
+        
+        if configure["snoop_mem"] == "bcc":
+            if configure["mem_output_file"] is None:
+                print("ERROR: You must specific the output file for mem snoop!\n")
+                exit()
+        elif configure["snoop_mem"] is None:
+            if not configure["mem_output_file"] is None:
+                print("WARNING: The output file for mem snoop will be invalid since you didn't specific the mem_snoop option!\n")
+        else:
+            print("ERROR: Invalid option for mem_snoop, please check your configure file!\n")
+            exit()
+
+        if not configure["memleak_probes"] is None:
+            if not configure["snoop_mem"] == "bcc":
+                print("ERROR: You must set mem_snoop to 'bcc' to run memleak_probes!\n")
+                exit()
+            else:
+                if configure["memleak_probes"]["output_file"] is None:
+                    print("ERROR: You must specific the output file for memleak probes!\n")
+                    exit()
+
+        if configure["snoop_network"] == "bcc":
+            if configure["network_output_file"] is None:
+                print("ERROR: You must specific the output file for network snoop!\n")
+                exit()
+        elif configure["snoop_network"] is None:
+            if not configure["network_output_file"] is None:
+                print("WARNING: The output file for network snoop will be invalid since you didn't specific the network_snoop option!\n")
+        else:
+            print("ERROR: Invalid option for network_snoop, please check your configure file!\n")
+            exit()
+
+        if configure["snoop_syscall"] == "bcc":
+            if configure["syscall_output_file"] is None:
+                print("ERROR: You must specific the output file for syscall snoop!\n")
+                exit()
+        elif configure["snoop_syscall"] is None:
+            if not configure["syscall_output_file"] is None:
+                print("WARNING: The output file for syscall snoop will be invalid since you didn't specific the syscall_snoop option!\n")
+        else:
+            print("ERROR: Invalid option for syscall_snoop, please check your configure file!\n")
+            exit()
+
+        if not isinstance(configure["interval"], int) and not isinstance(configure["interval"], float):
+            print("ERROR: Invalid value for interval, the value must be a number!\n")
+            exit()
+
+        if not configure["trace_multiprocess"] in ["true", "false"]:
+            print("ERROR: Invalid value for trace_multiprocess, the value must be 'true' or 'false'!\n")
+            exit()
+    except KeyError as e:
+        print("ERROR: Missing required option %s in configure file!\n" % e)
+        exit()
+
+    print_configure(configure)
+    
+    return
+        
 
 
 def print_configure(configure):
         print("================================================================================")
-        print("CPU_SNOOP_FILE:", configure['cpu_output_file'])
-        print("MEM_SNOOP_FILE:", configure['mem_output_file'])
-        print("NETWORK_SNOOP_FILE:", configure['network_output_file'])
-        print("SYSCALL_SNOOP_FILE:", configure['syscall_output_file'])
-        print("INTERVAL: ", configure['interval'])
-        print("SNOOP PID: ", configure['snoop_pid'])
-        print("Trace Multi Process: ", configure["trace_multiprocess"])
+        print("INTERVAL:", configure['interval'])
+        print("SNOOP PID:", configure['snoop_pid'])
+        print("Trace Multi Process:", configure["trace_multiprocess"])
+        print("CPU SNOOP:")
+        print("\t[%s] BCC" % ("X" if configure["snoop_cpu"]=="bcc" else " "))
+        print("\t[%s] stat" % ("X" if configure["snoop_cpu"]=="stat" else " "))
+        print("\t[%s] top" % ("X" if configure["snoop_cpu"]=="top" else " "))
+        print("MEM SNOOP:")
+        print("\t[%s] BCC" % (("X" if configure["snoop_mem"]=="bcc" else " ")))
+        print("NETWORK SNOOP:")
+        print("\t[%s] BCC" % ("X" if configure["snoop_network"]=="bcc" else " "))
+        print("SYSCALL SNOOP:")
+        print("\t[%s] BCC" % ("X" if configure["snoop_syscall"]=="bcc" else " "))
         print("================================================================================")
 
 def generate_prg(configure):
@@ -193,6 +273,9 @@ def generate_prg(configure):
     if configure['snoop_mem'] == "bcc":
         prg += mem_prg
         output_fp['mem'] = open(configure["mem_output_file"], "w")
+        if not configure['memleak_probes'] is None:
+            prg += memleak_prg
+            output_fp["memleak"] = open(configure["memleak_probes"]["output_file"], "w")
     if configure['snoop_network'] == "bcc":
         prg += network_prg
         output_fp["network"] = open(configure["network_output_file"], "w")
@@ -200,7 +283,7 @@ def generate_prg(configure):
         prg += syscall_prg
         output_fp['syscall'] = open(configure["syscall_output_file"], "w")
     
-    prg+=additional_func
+    prg += additional_func
     prg = prg.replace("SNOOP_PID", str(configure['snoop_pid']))
     prg = prg.replace("MULTI_PROCESS", str(configure["trace_multiprocess"]))
 
@@ -212,6 +295,8 @@ def attach_probes(configure, bpf_obj):
         cpu_attach_probe(bpf_obj)
     if configure["snoop_mem"] == "bcc":
         mem_attach_probe(bpf_obj)
+        if not configure['memleak_probes'] is None:
+            memleak_attach_probe(bpf_obj, configure)
     if configure["snoop_network"] == "bcc":
         network_attach_probe(bpf_obj)
     if configure["snoop_syscall"] == "bcc":
@@ -235,6 +320,8 @@ if __name__=='__main__':
             from cpu_snoop_top import cpu_top_record
         if configure['snoop_mem'] == "bcc":
             from mem_snoop import mem_prg, mem_attach_probe, mem_record
+            if not configure['memleak_probes'] is None:
+                from memleak_probe import memleak_prg, memleak_attach_probe, memleak_record
         if configure['snoop_network'] == "bcc":
             from network_snoop import network_prg, network_attach_probe, network_record
         if configure["snoop_syscall"] == "bcc":
