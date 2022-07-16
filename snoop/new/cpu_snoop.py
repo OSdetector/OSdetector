@@ -91,7 +91,6 @@ int sched_switch(struct pt_regs *ctx, struct task_struct *prev)
     u32 prev_pid = prev->pid;
     u32 prev_tgid = prev->tgid;
 
-
     // 因为finish_task_switch执行时task结构体已经切换为当前进程，此时无法获取前一个进程的ppid，所以只检查前一个进程本身是否在snoop_proc中
     if(snoop_proc.lookup(&prev_tgid) != NULL)    
     {
@@ -106,6 +105,7 @@ BAIL:
         update_offcpu_time(tgid, pid, ts);
         store_oncpu_start(tgid, pid, ts);
     }
+    bpf_trace_printk("Time clapsed: %d\\n", bpf_ktime_get_ns()-ts);
 
     return 0;
 }

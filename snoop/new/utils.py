@@ -1,6 +1,7 @@
 import subprocess
 import psutil
 import queue
+import time
 
 def pid_to_comm(pid):
     """根据pid查找/proc/pid/comm获取comm
@@ -74,3 +75,15 @@ def bfs_get_procs(snoop_pid):
         list(map(proc_queue.put, proc.children()))
     
     return pid_list
+
+def get_delta():
+    """获取unix时间与uptime的时间差
+    unix_time = bpf_get_ktime_ns()*1e-9+delta
+
+    Returns:
+        _type_: _description_
+    """
+    with open("/proc/uptime", "r") as f:
+        uptime = float(f.readline().split(" ")[0])
+    delta = time.time() - uptime   # delta是uptime和unix epoch time的差值，因为ebpf虚拟机只能获取uptime所以在前端重新转换为unix epoch time
+    return delta

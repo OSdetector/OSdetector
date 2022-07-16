@@ -199,7 +199,6 @@ int pvalloc_exit(struct pt_regs *ctx) {
 
 static inline int clear_mem(struct pt_regs *ctx)
 {
-        bpf_trace_printk("In clear_mem\\n");
         u64 pid_tgid = bpf_get_current_pid_tgid();
         u32 tgid = pid_tgid >> 32, pid = pid_tgid;
 

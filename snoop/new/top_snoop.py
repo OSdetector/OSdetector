@@ -21,6 +21,7 @@ header = """
 #include <net/sock.h>
 #include <bcc/proto.h>
 
+
 BPF_HASH(snoop_proc, u32, u8);     // tgid->TRUE/FALSE
 
 static inline int lookup_tgid(u32 tgid);
@@ -75,6 +76,8 @@ int clear_proc(struct pt_regs *ctx)
 
     return 0;
 }
+
+
 """
 
 def main_loop(configure, output_fp, bpf_obj):
@@ -99,12 +102,14 @@ def main_loop(configure, output_fp, bpf_obj):
                     cpu_top_record(output_file=output_fp["cpu"], cur_time=cur_time, snoop_pid=configure["snoop_pid"])
                 if configure["snoop_mem"] == "bcc":
                     mem_record(output_fp["mem"], cur_time, bpf_obj)
-                    if not configure['memleak_probes'] is None:
-                        memleak_record(output_fp["memleak"], bpf_obj)
+                    if not configure['probes'] is None:
+                        uprobe_record(output_fp["probes"], bpf_obj)
                 if configure["snoop_network"] == "bcc":
                     network_record(output_fp["network"], cur_time, bpf_obj)
                 if configure["snoop_syscall"] == "bcc":
                     syscall_record(output_fp["syscall"], bpf_obj)
+                if not configure["trace"] is None:
+                    trace_record(output_fp["trace"], bpf_obj, configure)
                 prev_time = cur_time
                 # 判断监控进程的状态，如果监控进程编程僵尸进程或进程已退出，则结束监控
                 try:
@@ -195,12 +200,12 @@ def check_configure(configure):
             print("ERROR: Invalid option for mem_snoop, please check your configure file!\n")
             exit()
 
-        if not configure["memleak_probes"] is None:
+        if not configure["probes"] is None:
             if not configure["snoop_mem"] == "bcc":
                 print("ERROR: You must set mem_snoop to 'bcc' to run memleak_probes!\n")
                 exit()
             else:
-                if configure["memleak_probes"]["output_file"] is None:
+                if configure["probes"]["output_file"] is None:
                     print("ERROR: You must specific the output file for memleak probes!\n")
                     exit()
 
@@ -270,18 +275,28 @@ def generate_prg(configure):
         output_fp['cpu'] = open(configure["cpu_output_file"], "w")
     elif configure["snoop_cpu"] == "top":
         output_fp['cpu'] = open(configure["cpu_output_file"], "w")
+    
     if configure['snoop_mem'] == "bcc":
         prg += mem_prg
         output_fp['mem'] = open(configure["mem_output_file"], "w")
-        if not configure['memleak_probes'] is None:
-            prg += memleak_prg
-            output_fp["memleak"] = open(configure["memleak_probes"]["output_file"], "w")
+        if not configure['probes'] is None:
+            prg += probe_header 
+            for event_name in configure['probes']['event_name']:
+                prg += probe_prg.replace("EVENT_NAME", event_name.split(":")[-1])
+            output_fp["probes"] = open(configure["probes"]["output_file"], "w")
+    
     if configure['snoop_network'] == "bcc":
         prg += network_prg
         output_fp["network"] = open(configure["network_output_file"], "w")
+    
     if configure["snoop_syscall"] == "bcc":
         prg += syscall_prg
         output_fp['syscall'] = open(configure["syscall_output_file"], "w")
+    
+    if not configure["trace"] is None:
+        prg = tracer_generate_prg(prg, configure)
+        output_fp["trace"] = open(configure["trace"]["output_file"], "w")
+
     
     prg += additional_func
     prg = prg.replace("SNOOP_PID", str(configure['snoop_pid']))
@@ -295,12 +310,14 @@ def attach_probes(configure, bpf_obj):
         cpu_attach_probe(bpf_obj)
     if configure["snoop_mem"] == "bcc":
         mem_attach_probe(bpf_obj)
-        if not configure['memleak_probes'] is None:
-            memleak_attach_probe(bpf_obj, configure)
+        if not configure['probes'] is None:
+            attach_uprobe(bpf_obj, configure)
     if configure["snoop_network"] == "bcc":
         network_attach_probe(bpf_obj)
     if configure["snoop_syscall"] == "bcc":
         syscall_attach_probe()
+    if not configure['trace'] is None:
+        trace_attach_probe(bpf_obj, configure)
 
     bpf_obj.attach_tracepoint(tp_re="sched:sched_process_exit", fn_name="clear_proc")
 
@@ -320,12 +337,14 @@ if __name__=='__main__':
             from cpu_snoop_top import cpu_top_record
         if configure['snoop_mem'] == "bcc":
             from mem_snoop import mem_prg, mem_attach_probe, mem_record
-            if not configure['memleak_probes'] is None:
-                from memleak_probe import memleak_prg, memleak_attach_probe, memleak_record
+            if not configure['probes'] is None:
+                from probe import probe_header, probe_prg, attach_uprobe, uprobe_record
         if configure['snoop_network'] == "bcc":
             from network_snoop import network_prg, network_attach_probe, network_record
         if configure["snoop_syscall"] == "bcc":
             from syscall_snoop import syscall_prg, syscall_attach_probe, syscall_record
+        if not configure["trace"] is None:
+            from tracer import tracer_generate_prg, trace_attach_probe, trace_record
     
         proc = psutil.Process(configure['snoop_pid'])
         prg, output_fp = generate_prg(configure)

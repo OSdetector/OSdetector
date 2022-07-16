@@ -16,7 +16,8 @@
 ├── cpu_snoop_top.py			# 基于top工具的进程CPU占用监控模块
 ├── mem.csv				# 进程内存占用监控模块输出文件
 ├── mem_snoop.py			# 基于BCC框架的进程内存占用监控模块
-├── memleak_probe.py			# 基于BCC框架的进程内存泄露检测模块
+├── probe.py				# 基于BCC框架的用户函数执行情况检测模块
+├── trace.py				# 基于BCC框架的用户函数执行跟踪模块
 ├── net.csv				# 进程流量监控模块输出文件
 ├── network_snoop.py			# 基于BCC框架的进程流量监控模块
 ├── README.md				# 本文件
@@ -35,10 +36,15 @@
     "cpu_output_file": "cpu.csv", 			# 进程CPU占用输出文件名
     "snoop_mem": "None",  				# 进程内存占用监控模块，可选项为("bcc", null)
     "mem_output_file": "mem.csv", 			# 进程内存占用输出文件名
-    "memleak_probes":{					# 内存泄露检测配置
+    "probes":{						# 用户态函数执行情况统计，包括内存占用变化，CPU时间分布
         "probes":["./mem_example/main:func1"],  	# 检测的函数挂载点，bin:func
         "output_file":"tmp.csv",			# 输出文件
-        "additional_var": "int parm1, char [10] parm2"  # TODO：附加检测参数
+    },
+    "trace": {						# 用户态函数执行跟踪
+        "tracee_name":["./test/search:search"],		# 检测的函数挂载点，bin:func
+        "output_file":"trace_output",			# 输出文件
+        "enter_msg_format":["'Enter search, n=%d' % (arg1)"], 	# 进入函数时输出的消息，支持的参数为arg1-arg6，类型为数字或字符串
+        "return_msg_format":["Return search"]			# 函数返回时输出的消息，支持的参数为retval
     },
     "snoop_network": "bcc", 				# 进程网络流量监控模块，可选项为("bcc", null)
     "network_output_file": "net.csv", 			# 进程流量监控输出文件名
@@ -145,17 +151,7 @@
 - SYSCALL_ID：系统调用号
 - PARM1：该系统调用的第1个参数，仅支持数值型。
 
-### 4.6 内存泄漏检测模块
-
-用户指定程序中的函数挂载点，通过在函数的入口与返回处检查进程内存占用情况对内存泄漏进行检测；
-
-输出说明：
-
-- Ticks：本次输出的时间
-- Size：本次触发输出时进程的内存占用
-- Times：本次触发输出时进程未释放的内存栈数量
-
-### 4.7 用户函数运行分析工具
+### 4.6 用户函数运行分析工具Probe
 
 根据用户指定的函数挂载点，在进入函数与函数返回时分别插桩，获取函数运行期间内存占用的变化和CPU时间的分布情况；
 
@@ -170,3 +166,13 @@
 - nvcsw：函数执行期间自愿上下文切换次数;
 - nivcsw：函数执行期间非自愿上下文切换次数;
 - time：函数执行;
+
+### 4.7 用户程序跟踪工具trace
+
+根据用户指定函数挂载点，在进入与返回函数处插桩，记录时间与用户指定的参数，输出到文件
+
+输出说明：
+
+- TICKS：时间戳
+- PID
+- msg：用户设置的输出
