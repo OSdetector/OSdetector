@@ -62,6 +62,16 @@ static inline int clear_throughput(struct pt_regs *ctx)
 def network_attach_probe(bpf_obj):
     pass
 
+def network_print_header(output_file):
+    output_file.write("%s,%s,%s,%s,%s\n" % ("TIME", "PID", "COMM", "RX_KB", "TX_KB"))
+
+def network_generate_prg(prg, show_all_threads=False):
+    if show_all_threads == True:
+        prg += network_prg.replace("PID", "pid")
+    else:
+        prg+= network_prg.replace("PID", "tgid")
+    return prg
+
 def network_record(output_file, cur_time, bpf_obj):
     ThroughputKey = namedtuple('Throughput', ['pid', 'name'])
     def get_throughput_key(k):

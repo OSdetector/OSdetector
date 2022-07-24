@@ -115,6 +115,13 @@ TRACEPOINT_PROBE(raw_syscalls, sys_exit)
 def syscall_attach_probe():
     pass
 
+def syscall_generate_prg(prg):
+    prg += syscall_prg
+    return prg
+
+def syscall_print_header(output_file):
+    output_file.write("%s,%s,%s,%s,%s,%s\n" % ("TIME", "PID", "COMM", "ACTION", "SYSCALL ID", "PARM1"))
+
 def syscall_record(output_file, bpf_obj):
     message_queue = bpf_obj['message_queue']
     with open("/proc/uptime", "r") as f:

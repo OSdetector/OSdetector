@@ -54,6 +54,10 @@ import os
     
 #     return cpu_usage
 
+def cpu_stat_print_header(output_file):
+    output_file.write("%s,%s,%s,%s,%s,%s\n" %("TIME", "PID", "COMM", "ON CPU", "OFF CPU", "CPU%"))
+
+
 def cpu_stat_record(output_file, cur_time, period, snoop_pid, old_usage):
     pid_list = bfs_get_procs(snoop_pid)
     proc_cpu_usages = {}

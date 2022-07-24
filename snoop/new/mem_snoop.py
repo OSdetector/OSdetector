@@ -70,6 +70,7 @@ static inline int gen_alloc_exit2(struct pt_regs *ctx, u64 address) {
         if (size64 == 0)
                 return 0; // missed alloc entry
         u32 tgid = pid_tgid>>32;
+        u32 pid = pid_tgid;
         // 检查是否为监控进程
         if(lookup_tgid(tgid) == 0)
                 return 0;
@@ -82,7 +83,7 @@ static inline int gen_alloc_exit2(struct pt_regs *ctx, u64 address) {
                 info.stack_id = stack_traces.get_stackid(ctx, 0 | BPF_F_USER_STACK);
                 allocs.update(&address, &info);
                 //u32 pid = pid_tgid;
-                update_statistics_add(tgid, info.size);
+                update_statistics_add(PID, info.size);
         }
 
         return 0;
@@ -103,7 +104,7 @@ static inline int gen_free_enter(struct pt_regs *ctx, void *address) {
         u32 tgid = bpf_get_current_pid_tgid()>>32;
         if(lookup_tgid(tgid) == 0)
                 return 0;
-        update_statistics_del(tgid, info->size);
+        update_statistics_del(PID, info->size);
 
         return 0;
 }
@@ -206,7 +207,7 @@ static inline int clear_mem(struct pt_regs *ctx)
         struct combined_alloc_info_t *existing_cinfo;
         struct combined_alloc_info_t cinfo = {0};
 
-        existing_cinfo = combined_allocs.lookup(&tgid);
+        existing_cinfo = combined_allocs.lookup(&PID);
         if (existing_cinfo != 0)
                 combined_allocs.delete(&tgid);
                 //cinfo = *existing_cinfo;
@@ -214,35 +215,15 @@ static inline int clear_mem(struct pt_regs *ctx)
         /*cinfo.total_size = 0;
         cinfo.number_of_allocs = 0;
 
-        combined_allocs.update(&tgid, &cinfo);*/
+        combined_allocs.update(&PID, &cinfo);*/
 
 
         return 0;
 }
-//BPF_STACK_TRACE(stack_traces, 10240);
-/*int uprobe_output(struct pt_regs *ctx)
-{
-        u32 tgid = bpf_get_current_pid_tgid()>>32;
-        struct combined_alloc_info_t* info = combined_allocs.lookup(&tgid);
-        char str[100];
-        stack_traces.get_stackid(ctx, BPF_F_USER_STACK);
-        int success = bpf_probe_read_user(str, 100*sizeof(char), (void *)PT_REGS_PARM2(ctx));
-        if(success != 0)
-                bpf_trace_printk("Fail to read user\\n");
-        if(info != NULL)
-                bpf_trace_printk("PARM:%d, %d, %s\\n", PT_REGS_PARM1(ctx), PT_REGS_PARM2(ctx), str);
-        return 0;
-}
-
-int uretprobe_output(struct pt_regs *ctx)
-{
-        u32 tgid = bpf_get_current_pid_tgid()>>32;
-        struct combined_alloc_info_t* info = combined_allocs.lookup(&tgid);
-        if(info != NULL)
-                bpf_trace_printk("Size:%d, nums:%d\\n", info->total_size, info->number_of_allocs);
-        return 0;
-}*/
 """
+
+def mem_print_header(output_file):
+        output_file.write("%s,%s,%s\n" %("TIME", "SIZE(B)", "NUM"))
 
 def mem_attach_probe(bpf_obj):
         obj='c'
@@ -278,7 +259,12 @@ def mem_attach_probe(bpf_obj):
         # bpf_obj.attach_uprobe(name="./mem_example/main", sym_re="func3", fn_name="uprobe_output")
         # bpf_obj.attach_uretprobe(name="./mem_example/main", sym_re="func3", fn_name="uretprobe_output")
 
-
+def mem_generate_prg(prg, configure):
+        if configure["show_all_threads"] == True:
+                prg += mem_prg.replace("PID", "pid")
+        else:
+                prg += mem_prg.replace("PID", "tgid")
+        return prg
 
 def mem_record(output_file, cur_time, bpf_obj):
         valid = 0

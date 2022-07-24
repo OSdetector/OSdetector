@@ -24,8 +24,10 @@ BPF_HASH(EVENT_NAME_enter_status, u32, struct probe_data_t);  // 暂存进入pro
 int EVENT_NAME_uprobe(struct pt_regs *ctx)
 {
     u32 tgid = bpf_get_current_pid_tgid()>>32;
+    u32 pid = bpf_get_current_pid_tgid();
     if(lookup_tgid(tgid) == 0)
         return 0;
+    SPID_FILTER
     struct combined_alloc_info_t* info = combined_allocs.lookup(&tgid);
     struct combined_alloc_info_t zero_combined_alloc = {0};
     if(info==NULL)
@@ -52,6 +54,7 @@ int EVENT_NAME_uprobe(struct pt_regs *ctx)
 int EVENT_NAME_uretprobe(struct pt_regs *ctx)
 {
     u32 tgid = bpf_get_current_pid_tgid()>>32;
+    u32 pid = bpf_get_current_pid_tgid();
     if(lookup_tgid(tgid) == 0)
         return 0;
     struct combined_alloc_info_t* info = combined_allocs.lookup(&tgid);
@@ -60,7 +63,7 @@ int EVENT_NAME_uretprobe(struct pt_regs *ctx)
     {
         info = &zero_combined_alloc;
     }
-
+    SPID_FILTER
     struct probe_data_t* prev_data_p = EVENT_NAME_enter_status.lookup(&tgid);
     u64 time = bpf_ktime_get_ns();
     if(prev_data_p!=NULL)
@@ -87,11 +90,17 @@ int EVENT_NAME_uretprobe(struct pt_regs *ctx)
 """
 
 
+def probe_print_header(output_file):
+    output_file.write(
+        "%s,%s,%s,%s,%s,%s,%s,%s,%s, %s, %s\n" %
+        ("PID", "EVENT NAME", "SIZE", "NUM", "UTime", "STime", "NVCSW",
+         "NIVCSW", "ENTER TIME", "RETURN TIME", "TOTAL TIME"))
+
+
 def attach_uprobe(bpf_obj, configure):
-    memleak_probes = configure["probes"]
-    for probe in memleak_probes["event_name"]:
+    probes = configure["probes"]
+    for probe in probes["event_name"]:
         name, sym = probe.split(":")
-        print(name, sym)
         bpf_obj.attach_uprobe(name=name, sym=sym, fn_name=sym + "_uprobe")
         bpf_obj.attach_uretprobe(name=name,
                                  sym=sym,
@@ -100,25 +109,41 @@ def attach_uprobe(bpf_obj, configure):
     return
 
 
+def probe_generate_prg(prg, configure):
+    prg += probe_header
+    for event_name in configure['probes']['event_name']:
+        tmp = probe_prg.replace("EVENT_NAME", event_name.split(":")[-1])
+        if not configure['probes']['spid'] is None:
+            tmp = tmp.replace(
+                "SPID_FILTER",
+                "if(pid!=%d) return 0;" % configure['probes']['spid'])
+        else:
+            tmp = tmp.replace("SPID_FILTER", "")
+        prg += tmp
+    return prg
+
+
 def uprobe_record(output_file, bpf_obj):
     HZ = os.sysconf("SC_CLK_TCK")
     delta = get_delta()
     while True:
         try:
             data = bpf_obj["probe_message_queue"].pop()
-            output_file.write("%d, %s, %u, %u, %.2f, %.2f, %d, %d, %.2f, %.2f, %.2f\n" % (
-                data.tgid,
-                data.event_name,
-                data.total_size,
-                data.number_of_allocs,
-                #  unit: ms
-                data.utime * 1e-4 / HZ,  # FIXME:Magic Num: It seems that 1 Jiffies = 1e7 * CPU_TIME
-                data.stime * 1e-4 / HZ,
-                data.nvcsw,
-                data.nivcsw,
-                data.start_time*1e-9+delta, 
-                data.end_time*1e-9+delta,
-                data.cost_time * 1e-6))
+            output_file.write(
+                "%d, %s, %u, %u, %.2f, %.2f, %d, %d, %.2f, %.2f, %.2f\n" % (
+                    data.tgid,
+                    data.event_name,
+                    data.total_size,
+                    data.number_of_allocs,
+                    #  unit: ms
+                    data.utime * 1e-4 /
+                    HZ,  # FIXME:Magic Num: It seems that 1 Jiffies = 1e7 * CPU_TIME
+                    data.stime * 1e-4 / HZ,
+                    data.nvcsw,
+                    data.nivcsw,
+                    data.start_time * 1e-9 + delta,
+                    data.end_time * 1e-9 + delta,
+                    data.cost_time * 1e-6))
         except KeyError:
             output_file.flush()
             break

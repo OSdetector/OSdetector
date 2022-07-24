@@ -22,8 +22,10 @@ BPF_QUEUE(TRACEE_NAME_return_msg_queue, struct TRACEE_NAME_return_msg_data_t, 10
 int TRACEE_NAME_enter(struct pt_regs* ctx)
 {
     u32 tgid = bpf_get_current_pid_tgid()>>32;
+    u32 pid = bpf_get_current_pid_tgid();
     if(lookup_tgid(tgid) == 0)
         return 0;
+    SPID_FILTER
     struct TRACEE_NAME_enter_msg_data_t data;
     __builtin_memset(&data, 0, sizeof(data));
     data.tgid = tgid;
@@ -37,9 +39,10 @@ int TRACEE_NAME_enter(struct pt_regs* ctx)
 int TRACEE_NAME_return(struct pt_regs *ctx)
 {
     u32 tgid = bpf_get_current_pid_tgid()>>32;
+    u32 pid = bpf_get_current_pid_tgid();
     if(lookup_tgid(tgid) == 0)
         return 0;
-    
+    SPID_FILTER
     struct TRACEE_NAME_return_msg_data_t data;
     __builtin_memset(&data, 0, sizeof(data));
     data.tgid = tgid;
@@ -82,7 +85,10 @@ aliases_indarg = {
 def tracer_generate_prg(prg, configure):
     trace_config = configure['trace']
     for tracee, enter_msg_format, return_msg_format in zip(trace_config['tracee_name'], trace_config['enter_msg_format'], trace_config['return_msg_format']):
-        prg += tracer_prg
+        if not configure['trace']['spid'] is None:
+            prg += tracer_prg.replace("SPID_FILTER", "if(pid!=%d) return 0;" % configure['probes']['spid'])
+        else:
+            prg += tracer_prg.replace("SPID_FILTER", "")
         name, sym = tracee.split(":")
         for format, type in zip((enter_msg_format, return_msg_format), ("enter", "return")):
             partion = format.split("\'")
@@ -156,4 +162,7 @@ def trace_record(output_file, bpf_obj, configure):
     for msg in msg_list:
         output_file.write(msg[1])
     output_file.flush()
+
+def trace_print_header(output_file):
+    output_file.write("%s,%s,%s\n" % ("TIME", "PID", "MSG"))
         

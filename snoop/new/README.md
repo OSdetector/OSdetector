@@ -37,14 +37,16 @@
     "snoop_mem": "None",  				# 进程内存占用监控模块，可选项为("bcc", null)
     "mem_output_file": "mem.csv", 			# 进程内存占用输出文件名
     "probes":{						# 用户态函数执行情况统计，包括内存占用变化，CPU时间分布
-        "probes":["./mem_example/main:func1"],  	# 检测的函数挂载点，bin:func
+        "event_name":["./mem_example/main:func1"],  	# 检测的函数挂载点，bin:func
         "output_file":"tmp.csv",			# 输出文件
+	"spid":10000					# 对某个特定线程进行监控，spid为线程id，填入null表示不启用
     },
     "trace": {						# 用户态函数执行跟踪
         "tracee_name":["./test/search:search"],		# 检测的函数挂载点，bin:func
         "output_file":"trace_output",			# 输出文件
         "enter_msg_format":["'Enter search, n=%d' % (arg1)"], 	# 进入函数时输出的消息，支持的参数为arg1-arg6，类型为数字或字符串
         "return_msg_format":["Return search"]			# 函数返回时输出的消息，支持的参数为retval
+	"spid":10000					# 对某个特定线程进行监控，spid为线程id，填入null表示不启用
     },
     "snoop_network": "bcc", 				# 进程网络流量监控模块，可选项为("bcc", null)
     "network_output_file": "net.csv", 			# 进程流量监控输出文件名
@@ -65,7 +67,7 @@
 
 输出说明
 
-- Ticks：本次输出时的时间（当值为END时代表进程退出）
+- TIME：本次输出时的时间（当值为END时代表进程退出）
 - PID：监控进程的PID
 - COMM：启动本次进程的命令
 - ON CPU：进程运行时间，单位（ms）。使用top模块获取占用率时该项恒为-1.
@@ -112,9 +114,9 @@
 
 输出说明：
 
-- ticks：本次输出时的时间（当值为END时代表进程退出）
-- size(B)：当前进程占用的内存大小，单位为字节
-- times：当前进程仍未释放的内存申请次数
+- TIME：本次输出时的时间（当值为END时代表进程退出）
+- SIZE(B)：当前进程占用的内存大小，单位为字节
+- NUM：当前进程仍未释放的内存申请次数
 
 启用多进程选项后，同一时间戳下会有多行数据对应不同进程。
 
@@ -128,7 +130,7 @@
 
 输出说明：
 
-- Ticks：本次输出时的时间（当值为END时代表进程退出）
+- TIME：本次输出时的时间（当值为END时代表进程退出）
 - PID：监控进程的PID
 - COMM：启动本次进程的命令
 - RX_KB：进程接受流量，单位为KB
@@ -144,7 +146,7 @@
 
 输出说明：
 
-- Ticks：本次输出时的时间（当值为END时代表进程退出）
+- TIME：本次输出时的时间（当值为END时代表进程退出）
 - PID：监控进程的PID
 - COMM：启动本次进程的命令
 - ACTION：取值为{0：ENTER，1：LEAVE}，表示进程进入或退出某个系统调用
@@ -165,7 +167,9 @@
 - stime：函数执行期间内核态时间，单位ms;
 - nvcsw：函数执行期间自愿上下文切换次数;
 - nivcsw：函数执行期间非自愿上下文切换次数;
-- time：函数执行;
+- ENTER TIME：进入函数调用的时间
+- RETURN TIME：从函数调用返回的时间
+- time：函数从进入到返回经历的时间;
 
 ### 4.7 用户程序跟踪工具trace
 
@@ -173,6 +177,6 @@
 
 输出说明：
 
-- TICKS：时间戳
+- TIME：时间戳
 - PID
-- msg：用户设置的输出
+- MSG：用户设置的输出

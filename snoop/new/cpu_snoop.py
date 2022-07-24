@@ -124,6 +124,10 @@ static inline  clear_proc_time(struct pt_regs *ctx)
 }
 """
 
+def cpu_bcc_print_header(output_file):
+    output_file.write("%s,%s,%s,%s,%s,%s\n" %("TIME", "PID", "COMM", "ON CPU", "OFF CPU", "CPU%"))
+
+
 def cpu_attach_probe(bpf_obj):
         bpf_obj.attach_kprobe(event_re="^finish_task_switch$", fn_name="sched_switch")
         # bpf_obj.attach_tracepoint("sys_exit_*", "clear_proc_time")
