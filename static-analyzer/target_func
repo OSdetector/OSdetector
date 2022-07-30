@@ -1,0 +1,3 @@
+MEM:malloc,calloc,realloc,posix_memalign,valloc,memalign,pvalloc,aligned_alloc,free
+FILE:fopen,fclose,fread,fwrite,fgets,fputs,fgetc,fputc,fscanf,fprintf
+pthread:pthread_mutex_lock,pthread_join,

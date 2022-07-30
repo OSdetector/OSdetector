@@ -1,8 +1,5 @@
-#! /bin/python3
-from bcc import BPF
-import psutil
-from utils import run_command_get_pid
-text = """
+import time
+syscall_prg="""
 #include <uapi/linux/ptrace.h>
 #include <net/sock.h>
 #include <bcc/proto.h>
@@ -12,6 +9,15 @@ enum output_type{
     ENTER,
     RETURN
 };
+
+/*static unsigned long get_nsecs(void)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000000000UL + ts.tv_nsec;
+}*/
+
 // 挂载函数被唤醒时可获得的数据
 struct data_t{
     enum output_type type;
@@ -30,24 +36,25 @@ struct data_t{
     unsigned long sp;
     unsigned long ip;
 };
-// 这种输出方式会有乱序问题，暂时不采用
-//BPF_PERF_OUTPUT(enter_channel);
-//BPF_PERF_OUTPUT(ret_channel);
-//BPF_PERF_OUTPUT(event);
+
+BPF_QUEUE(message_queue, struct data_t, 10240);
+
+
 
 // 挂载到系统调用统一入口处
 TRACEPOINT_PROBE(raw_syscalls, sys_enter)
 {
     struct data_t data = {0};
 
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
-    u32 tgid = bpf_get_current_pid_tgid();
+    u32 pid = bpf_get_current_pid_tgid();
+    u32 tgid = bpf_get_current_pid_tgid() >> 32;
 
-    PID_FILTER
-    TGID_FILTER
+    if(lookup_tgid(tgid) == 0)
+        return 0;
 
     data.pid = pid;
     data.ts = bpf_ktime_get_ns();
+    //data.ts = get_nsecs();
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
 
     data.syscall_id = args->id;
@@ -66,13 +73,8 @@ TRACEPOINT_PROBE(raw_syscalls, sys_enter)
     data.type = ENTER;
 
     // 向前端输出相关信息
-    bpf_trace_printk("Enter %d %u\\n", 
-                        data.syscall_id,
-                        data.ret);
+    message_queue.push(&data, BPF_EXIST);
     
-    // 因为乱序问题弃用
-    // enter_channel.perf_submit(args, &data, sizeof(data));
-    //event.perf_submit(args, &data, sizeof(data));
 
     return 0;
 }
@@ -81,11 +83,11 @@ TRACEPOINT_PROBE(raw_syscalls, sys_enter)
 TRACEPOINT_PROBE(raw_syscalls, sys_exit)
 {
     struct data_t data = {0};
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
-    u32 tgid = bpf_get_current_pid_tgid();
+    u32 pid = bpf_get_current_pid_tgid();
+    u32 tgid = bpf_get_current_pid_tgid()>>32;
 
-    PID_FILTER
-    TGID_FILTER
+    if(lookup_tgid(tgid) == 0)
+        return 0;
 
     data.pid = pid;
     bpf_get_current_comm(&data.comm, sizeof(data.comm));     // bpf_get_current_pid_tgid返回值为u64：pid+tgid
@@ -104,91 +106,33 @@ TRACEPOINT_PROBE(raw_syscalls, sys_exit)
     data.type = RETURN;
     
     // 向前端输出
-    bpf_trace_printk("Leave %d %d\\n", 
-                        data.syscall_id, data.ret);
-    // 因为乱序问题弃用
-    //ret_channel.perf_submit(args, &data, sizeof(data));
-    //event.perf_submit(args, &data, sizeof(data));
+    message_queue.push(&data, BPF_EXIST);
+
     return 0;
 }
 """
 
-class SyscallSnoop():
-    def __init__(self) -> None:
-        self.prg = text
-    
-    def generate_program(self, snoop_pid, snoop_one_thread=False):
-        """生成挂在程序，主要是替换监控的PID
+def syscall_attach_probe():
+    pass
 
-        Args:
-            snoop_pid (int): 监控进程的PID
-        """
+def syscall_generate_prg(prg):
+    prg += syscall_prg
+    return prg
 
-        if snoop_one_thread==True:
-            self.prg = self.prg.replace("PID_FILTER", "if(pid==%d) return 0;" % snoop_pid)
-            self.prg = self.prg.replace("TGID_FILTER", "")
-        else:
-            self.prg = self.prg.replace("TGID_FILTER", "if(tgid==%d) return 0;" % snoop_pid)
-            self.prg = self.prg.replace("PID_FILTER", "")
-        return
+def syscall_print_header(output_file):
+    output_file.write("%s,%s,%s,%s,%s,%s\n" % ("TIME", "PID", "COMM", "ACTION", "SYSCALL ID", "PARM1"))
 
-    def attatch_probe(self):
-        """将程序挂载到挂载点上
-        """
-        self.bpf = BPF(text=self.prg)
-        return  
-
-    def record(self, task, pid, ts, msg):
-        """记录函数，将数据输出到文件
-
-        Args:
-            task (str): 启动进程的命令
-            pid (int): 监控进程号
-            ts (int): 当前时间
-            msg (str): eBPF虚拟机向前端输出的信息
-        """
-        if msg is None:
-            return
-        # 将以空格划分的信息拆分成项
-        msg = msg.split(b" ")
-        self.output_file.write("%-18.9f,%-16s,%-6d,%s,%s,%s\n" % (ts, task, pid, msg[0], msg[1], msg[2]))
-        # print(("%-18.9f, %-16s, %-6d, %s, %s, %s\n" % (ts, task, pid, msg[0], msg[1], msg[2])))
-        self.output_file.flush()
-        # 输出信息为END表示监控进程已退出
-        if(msg[0] == b'END'):
-            self.output_file.close()
-            exit()
-    def main_loop(self):
-        """
-        主循环体，持续等待eBPF虚拟机传来消息，调用
-        record进行输出
-        """
-        while 1:
-            try:
-                (task, pid, cpu, flags, ts, msg) = self.bpf.trace_fields(nonblocking=False)
-            except KeyboardInterrupt:
-                if not self.output_file.closed:
-                    self.output_file.close()
-                exit()
-            self.record(task, pid, ts, msg)
-
-    def run(self, output_filename, snoop_pid):
-        """运行方法，对外接口
-        完成挂载程序生成，挂载程序，启动主循环等功能
-
-        Args:
-            output_filename (str): 输出文件名
-            snoop_pid (int): 监控进程
-        """
-        self.proc = psutil.Process(snoop_pid)
-        self.generate_program(snoop_pid)
-        self.attatch_probe()
-        self.output_file = open(output_filename, "w")
-        self.output_file.write("TICKS,COMM,PID,ACTION,SYSCALL_ID,RET\n")
-        self.main_loop()
-
-
-if __name__=="__main__":
-    snoop = SyscallSnoop()
-    pid = run_command_get_pid("../test_examples/mem")
-    snoop.run(output_filename="tmp.csv", snoop_pid=pid)
+def syscall_record(output_file, bpf_obj):
+    message_queue = bpf_obj['message_queue']
+    with open("/proc/uptime", "r") as f:
+        uptime = float(f.readline().split(" ")[0])
+    delta = time.time() - uptime   # delta是uptime和unix epoch time的差值，因为ebpf虚拟机只能获取uptime所以在前端重新转换为unix epoch time
+    while True:
+        try:
+            info = message_queue.pop()
+            # print(type(info.type), type(info.comm))
+            ts = info.ts*1e-9+delta
+            output_file.write("%f,%16s,%-6d,%d,%d,%d\n" % (ts, info.comm, info.pid, info.type, info.syscall_id, info.parm1))
+        except KeyError:
+            break
+    output_file.flush()
