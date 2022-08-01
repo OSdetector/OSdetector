@@ -323,7 +323,7 @@ def generate_prg(configure):
         network_print_header(output_fp["network"])
 
     if configure["snoop_syscall"] == "bcc":
-        prg = syscall_generate_prg(prg)
+        prg = syscall_generate_prg(prg, configure["show_all_threads"])
         output_fp['syscall'] = open(configure["syscall_output_file"], "w")
         syscall_print_header(output_fp['syscall'])
 

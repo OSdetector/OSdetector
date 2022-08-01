@@ -52,7 +52,7 @@ TRACEPOINT_PROBE(raw_syscalls, sys_enter)
     if(lookup_tgid(tgid) == 0)
         return 0;
 
-    data.pid = pid;
+    data.pid = PID;
     data.ts = bpf_ktime_get_ns();
     //data.ts = get_nsecs();
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
@@ -89,7 +89,7 @@ TRACEPOINT_PROBE(raw_syscalls, sys_exit)
     if(lookup_tgid(tgid) == 0)
         return 0;
 
-    data.pid = pid;
+    data.pid = PID;
     bpf_get_current_comm(&data.comm, sizeof(data.comm));     // bpf_get_current_pid_tgid返回值为u64：pid+tgid
     data.ts = bpf_ktime_get_ns();
     data.syscall_id = args->id;
@@ -115,8 +115,8 @@ TRACEPOINT_PROBE(raw_syscalls, sys_exit)
 def syscall_attach_probe():
     pass
 
-def syscall_generate_prg(prg):
-    prg += syscall_prg
+def syscall_generate_prg(prg, show_all_threads=False):
+    prg += syscall_prg.replace("PID", "pid") if show_all_threads else syscall_prg.replace("PID", "tgid")
     return prg
 
 def syscall_print_header(output_file):
