@@ -105,7 +105,7 @@ BAIL:
         update_offcpu_time(tgid, pid, ts);
         store_oncpu_start(tgid, pid, ts);
     }
-    bpf_trace_printk("Time clapsed: %d\\n", bpf_ktime_get_ns()-ts);
+    //bpf_trace_printk("Time clapsed: %d\\n", bpf_ktime_get_ns()-ts);
 
     return 0;
 }

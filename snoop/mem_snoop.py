@@ -21,7 +21,8 @@ BPF_STACK_TRACE(stack_traces, 10240);
 BPF_HASH(combined_allocs, u32, struct combined_alloc_info_t, 10240);  // tgid->combined_alloc_info_t
 
 // 更新某个进程栈的空间大小
-static inline void update_statistics_add(u32 tgid, u64 sz) {
+static inline void update_statistics_add(
+        u32 tgid, u64 sz) {
         struct combined_alloc_info_t *existing_cinfo;
         struct combined_alloc_info_t cinfo = {0};
 
@@ -58,6 +59,10 @@ static inline void update_statistics_del(u32 tgid, u64 sz) {
 static inline int gen_alloc_enter(struct pt_regs *ctx, size_t size) {
         u64 pid = bpf_get_current_pid_tgid();
         u64 size64 = size;
+        if(lookup_tgid(pid>>32) == 0)
+                return 0;
+        if(size == 0)
+                bpf_trace_printk("Warning: Try to alloc zero size block, tgid:%d, pid:%d\\n", pid>>32, pid);
         sizes.update(&pid, &size64);
         return 0;
 }
@@ -74,7 +79,6 @@ static inline int gen_alloc_exit2(struct pt_regs *ctx, u64 address) {
         // 检查是否为监控进程
         if(lookup_tgid(tgid) == 0)
                 return 0;
-
         info.size = *size64;
         sizes.delete(&pid_tgid);
 
@@ -94,16 +98,27 @@ static inline int gen_alloc_exit(struct pt_regs *ctx) {
 }
 // 内存释放挂载函数
 static inline int gen_free_enter(struct pt_regs *ctx, void *address) {
-        u64 addr = (u64)address;
-        struct alloc_info_t *info = allocs.lookup(&addr);
-        if (info == 0)
-                return 0;
-
-        allocs.delete(&addr);
         u32 pid = bpf_get_current_pid_tgid();
         u32 tgid = bpf_get_current_pid_tgid()>>32;
         if(lookup_tgid(tgid) == 0)
                 return 0;
+
+        u64 addr = (u64)address;
+        struct alloc_info_t *info = allocs.lookup(&addr);
+        if (info == 0)
+        {
+                bpf_trace_printk("Warning: Try to free an memory block that doesn't belong to the process, tgid:%d, pid:%d, addr:%x\\n", tgid, pid, (int)address);
+                struct combined_alloc_info_t cinfo = {
+                        .total_size = PID,
+                        .number_of_allocs = (u64)address
+                };
+                u32 tgid = PID_MAX+1;
+                combined_allocs.update(&tgid, &cinfo);
+                return 0;
+        }
+
+        allocs.delete(&addr);
+
         update_statistics_del(PID, info->size);
 
         return 0;
@@ -222,6 +237,8 @@ static inline int clear_mem(struct pt_regs *ctx)
 }
 """
 
+pid_max=0
+
 def mem_print_header(output_file):
         output_file.write("%s,%s,%s\n" %("TIME", "SIZE(B)", "NUM"))
 
@@ -260,18 +277,24 @@ def mem_attach_probe(bpf_obj):
         # bpf_obj.attach_uretprobe(name="./mem_example/main", sym_re="func3", fn_name="uretprobe_output")
 
 def mem_generate_prg(prg, configure):
+        with open("/proc/sys/kernel/pid_max", "r") as f:
+                pid_max = int(f.read().strip())
         if configure["show_all_threads"] == True:
-                prg += mem_prg.replace("PID", "pid")
+                prg += mem_prg.replace("PID_MAX", str(pid_max)).replace("PID", "pid")
         else:
-                prg += mem_prg.replace("PID", "tgid")
+                prg += mem_prg.replace("PID_MAX", str(pid_max)).replace("PID", "tgid")
+
         return prg
 
 def mem_record(output_file, cur_time, bpf_obj):
         valid = 0
         for key, info in sorted(bpf_obj["combined_allocs"].items(), key=lambda k: k[0].value):
                 # BCC使用items()获取表中内容返回的k为c_uint8对象，需要使用value获取值
-                output_file.write("%.2f,%12d,%d,%d\n" % (cur_time, key.value, info.total_size, info.number_of_allocs))
-                valid = 1    
+                if key.value == pid_max+1:
+                        print("[%.2f]Warning: Detect operation trying to free unknown memory, pid:%d, address:%x\n" % (cur_time, info.total_size, info.number_of_allocs))
+                else:
+                        output_file.write("%.2f,%12d,%d,%d\n" % (cur_time, key.value, info.total_size, info.number_of_allocs))
+                        valid = 1    
             # print("%.2f, %d, %d\n" % (cur_time, info.total_size, info.number_of_allocs), pid)
         if valid == 0:
                 for key, value in bpf_obj['snoop_proc'].items():

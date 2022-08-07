@@ -48,7 +48,7 @@ static inline int lookup_tgid(u32 tgid)
         if(snoop_proc.lookup(&ppid) != NULL)
         {
                 snoop_proc.insert(&tgid, &TRUE);
-                bpf_trace_printk("Add new snoop proc, task_tgid=%d, tgid=%d, ppid=%d\\n", task_tgid, tgid, ppid);
+                //bpf_trace_printk("Add new snoop proc, task_tgid=%d, tgid=%d, ppid=%d\\n", task_tgid, tgid, ppid);
                 return 1;
         }
      }
@@ -72,7 +72,7 @@ int clear_proc(struct pt_regs *ctx)
     clear_throughput(ctx);
 #endif
     snoop_proc.delete(&tgid);
-    bpf_trace_printk("Remove %d\\n", tgid);
+   // bpf_trace_printk("Remove %d\\n", tgid);
 
     return 0;
 }
@@ -117,7 +117,14 @@ def main_loop(configure, output_fp, bpf_obj):
                 syscall_record(output_fp["syscall"], bpf_obj)
             if not configure["trace"] is None:
                 trace_record(output_fp["trace"], bpf_obj, configure)
+            while True:
+                try:
+                    (task, pid, cpu, flags, ts, msg) = b.trace_fields()
+                except ValueError:
+                    break
+                print("%-18.9f %-16s %-6d %s" % (ts, task, pid, msg))
             prev_time = cur_time
+
             # 判断监控进程的状态，如果监控进程编程僵尸进程或进程已退出，则结束监控
             try:
                     status = proc.status()
