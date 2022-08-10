@@ -1,20 +1,24 @@
-#! /bin/python3
-from bcc import BPF
-import psutil
-from utils import run_command_get_pid
-text = """
+import time
+syscall_prg="""
 #include <uapi/linux/ptrace.h>
 #include <net/sock.h>
 #include <bcc/proto.h>
 
+// 向前端携带信息，表示本次输出是进程进入或退出某个系统调用
 enum output_type{
     ENTER,
     RETURN
 };
 
-#define SYSCALL_ID_EXIT 64
-#define SYSCALL_ID_EXIT_GROUP 231
+/*static unsigned long get_nsecs(void)
+{
+    struct timespec ts;
 
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000000000UL + ts.tv_nsec;
+}*/
+
+// 挂载函数被唤醒时可获得的数据
 struct data_t{
     enum output_type type;
     u32 pid;
@@ -33,20 +37,28 @@ struct data_t{
     unsigned long ip;
 };
 
-BPF_PERF_OUTPUT(enter_channel);
-BPF_PERF_OUTPUT(ret_channel);
-BPF_PERF_OUTPUT(event);
+BPF_QUEUE(message_queue, struct data_t, 10240);
 
+
+
+// 挂载到系统调用统一入口处
 TRACEPOINT_PROBE(raw_syscalls, sys_enter)
 {
     struct data_t data = {0};
-    data.pid = bpf_get_current_pid_tgid() >> 32;
-    if(data.pid != SNOOP_PID)
+
+    u32 pid = bpf_get_current_pid_tgid();
+    u32 tgid = bpf_get_current_pid_tgid() >> 32;
+
+    if(lookup_tgid(tgid) == 0)
         return 0;
+
+    data.pid = PID;
     data.ts = bpf_ktime_get_ns();
+    //data.ts = get_nsecs();
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
 
     data.syscall_id = args->id;
+    // 通过寄存器的值获取本次系统调用的参数
     struct pt_regs *regs = (struct pt_regs *)args->args;
     data.parm1 = regs->di;
     data.parm2 = regs->si;
@@ -60,22 +72,25 @@ TRACEPOINT_PROBE(raw_syscalls, sys_enter)
     data.ip = regs->ip;
     data.type = ENTER;
 
-    bpf_trace_printk("Enter %d %u\\n", 
-                        data.syscall_id,
-                        data.ret);
-    if(data.syscall_id==SYSCALL_ID_EXIT || data.syscall_id==SYSCALL_ID_EXIT_GROUP)
-        bpf_trace_printk("END 0 0\\n");
+    // 向前端输出相关信息
+    message_queue.push(&data, BPF_EXIST);
+    
+
     return 0;
 }
 
+// 挂载到系统调用统一返回处
 TRACEPOINT_PROBE(raw_syscalls, sys_exit)
 {
     struct data_t data = {0};
-    data.pid = bpf_get_current_pid_tgid() >> 32;
+    u32 pid = bpf_get_current_pid_tgid();
+    u32 tgid = bpf_get_current_pid_tgid()>>32;
 
-    if(data.pid != SNOOP_PID)
+    if(lookup_tgid(tgid) == 0)
         return 0;
-    bpf_get_current_comm(&data.comm, sizeof(data.comm));
+
+    data.pid = PID;
+    bpf_get_current_comm(&data.comm, sizeof(data.comm));     // bpf_get_current_pid_tgid返回值为u64：pid+tgid
     data.ts = bpf_ktime_get_ns();
     data.syscall_id = args->id;
     data.parm1 = 0;
@@ -90,65 +105,34 @@ TRACEPOINT_PROBE(raw_syscalls, sys_exit)
     data.ret = args->ret;
     data.type = RETURN;
     
-    bpf_trace_printk("Leave %d %d\\n", 
-                        data.syscall_id, data.ret);
+    // 向前端输出
+    message_queue.push(&data, BPF_EXIST);
+
     return 0;
 }
 """
 
-class SyscallSnoop():
-    def __init__(self) -> None:
-        self.prg = text
-    
-    def generate_program(self, snoop_pid):
-        self.prg = self.prg.replace("SNOOP_PID", str(snoop_pid))
-        return
+def syscall_attach_probe():
+    pass
 
-    def attatch_probe(self):
-        self.bpf = BPF(text=self.prg)
-        return  
+def syscall_generate_prg(prg, show_all_threads=False):
+    prg += syscall_prg.replace("PID", "pid") if show_all_threads else syscall_prg.replace("PID", "tgid")
+    return prg
 
-    def record(self, task, pid, ts, msg):
-        if msg is None:
-            return
-        msg = msg.split(b" ")
-        self.output_file.write("%-18.9f,%-16s,%-6d,%s,%s,%s\n" % (ts, task, pid, msg[0], msg[1], msg[2]))
-        # print(("%-18.9f, %-16s, %-6d, %s, %s, %s\n" % (ts, task, pid, msg[0], msg[1], msg[2])))
-        self.output_file.flush()
-        if(msg[0] == b'END'):
-            self.output_file.close()
-            exit()
-    def main_loop(self):
-        while 1:
-            # print("1")
-            try:
-                (task, pid, cpu, flags, ts, msg) = self.bpf.trace_fields(nonblocking=False)
-            except KeyboardInterrupt:
-                if not self.output_file.closed:
-                    self.output_file.close()
-                continue
-            self.record(task, pid, ts, msg)
-            # try:
-            #     status = self.proc.status()
-            # except Exception:
-            #     self.output_file.write("END")
-            #     self.output_file.close()
-            #     exit()
-            # if status == "zombie":
-            #     self.output_file.write("END")
-            #     self.output_file.close()
-            #     exit()
+def syscall_print_header(output_file):
+    output_file.write("%s,%s,%s,%s,%s,%s\n" % ("TIME", "PID", "COMM", "ACTION", "SYSCALL ID", "PARM1"))
 
-    def run(self, output_filename, snoop_pid):
-        self.proc = psutil.Process(snoop_pid)
-        self.generate_program(snoop_pid)
-        self.attatch_probe()
-        self.output_file = open(output_filename, "w")
-        self.output_file.write("TICKS,COMM,PID,ACTION,SYSCALL_ID,RET\n")
-        self.main_loop()
-
-
-if __name__=="__main__":
-    snoop = SyscallSnoop()
-    pid = run_command_get_pid("../test_examples/mem")
-    snoop.run(output_filename="tmp.csv", snoop_pid=pid)
+def syscall_record(output_file, bpf_obj):
+    message_queue = bpf_obj['message_queue']
+    with open("/proc/uptime", "r") as f:
+        uptime = float(f.readline().split(" ")[0])
+    delta = time.time() - uptime   # delta是uptime和unix epoch time的差值，因为ebpf虚拟机只能获取uptime所以在前端重新转换为unix epoch time
+    while True:
+        try:
+            info = message_queue.pop()
+            # print(type(info.type), type(info.comm))
+            ts = info.ts*1e-9+delta
+            output_file.write("%f,%16s,%-6d,%d,%d,%d\n" % (ts, info.comm, info.pid, info.type, info.syscall_id, info.parm1))
+        except KeyError:
+            break
+    output_file.flush()

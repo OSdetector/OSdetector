@@ -1,0 +1,15 @@
+{
+    "snoop_cpu": "top",   
+    "cpu_output_file": "cpu.csv",
+    "snoop_mem": "bcc",
+    "mem_output_file": "mem.csv",
+    "probes":null,
+    "trace": null,
+    "snoop_network": "bcc",
+    "network_output_file": "net.csv",
+    "snoop_syscall": "bcc",
+    "syscall_output_file": "syscall.csv",
+    "interval": 3,
+    "trace_multiprocess": true,
+    "show_all_threads": false
+}
