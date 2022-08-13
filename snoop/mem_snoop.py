@@ -124,95 +124,6 @@ static inline int gen_free_enter(struct pt_regs *ctx, void *address) {
         return 0;
 }
 
-// 具体的用户态内存分配相关函数的挂载函数
-
-int malloc_enter(struct pt_regs *ctx, size_t size) {
-        return gen_alloc_enter(ctx, size);
-}
-
-int malloc_exit(struct pt_regs *ctx) {
-        return gen_alloc_exit(ctx);
-}
-
-int free_enter(struct pt_regs *ctx, void *address) {
-        return gen_free_enter(ctx, address);
-}
-
-int calloc_enter(struct pt_regs *ctx, size_t nmemb, size_t size) {
-        return gen_alloc_enter(ctx, nmemb * size);
-}
-
-int calloc_exit(struct pt_regs *ctx) {
-        return gen_alloc_exit(ctx);
-}
-
-int realloc_enter(struct pt_regs *ctx, void *ptr, size_t size) {
-        gen_free_enter(ctx, ptr);
-        return gen_alloc_enter(ctx, size);
-}
-
-int realloc_exit(struct pt_regs *ctx) {
-        return gen_alloc_exit(ctx);
-}
-
-int posix_memalign_enter(struct pt_regs *ctx, void **memptr, size_t alignment,
-                         size_t size) {
-        u64 memptr64 = (u64)(size_t)memptr;
-        u64 pid = bpf_get_current_pid_tgid();
-
-        memptrs.update(&pid, &memptr64);
-        return gen_alloc_enter(ctx, size);
-}
-
-int posix_memalign_exit(struct pt_regs *ctx) {
-        u64 pid = bpf_get_current_pid_tgid();
-        u64 *memptr64 = memptrs.lookup(&pid);
-        void *addr;
-
-        if (memptr64 == 0)
-                return 0;
-
-        memptrs.delete(&pid);
-
-        if (bpf_probe_read_user(&addr, sizeof(void*), (void*)(size_t)*memptr64))
-                return 0;
-
-        u64 addr64 = (u64)(size_t)addr;
-        return gen_alloc_exit2(ctx, addr64);
-}
-
-int aligned_alloc_enter(struct pt_regs *ctx, size_t alignment, size_t size) {
-        return gen_alloc_enter(ctx, size);
-}
-
-int aligned_alloc_exit(struct pt_regs *ctx) {
-        return gen_alloc_exit(ctx);
-}
-
-int valloc_enter(struct pt_regs *ctx, size_t size) {
-        return gen_alloc_enter(ctx, size);
-}
-
-int valloc_exit(struct pt_regs *ctx) {
-        return gen_alloc_exit(ctx);
-}
-
-int memalign_enter(struct pt_regs *ctx, size_t alignment, size_t size) {
-        return gen_alloc_enter(ctx, size);
-}
-
-int memalign_exit(struct pt_regs *ctx) {
-        return gen_alloc_exit(ctx);
-}
-
-int pvalloc_enter(struct pt_regs *ctx, size_t size) {
-        return gen_alloc_enter(ctx, size);
-}
-
-int pvalloc_exit(struct pt_regs *ctx) {
-        return gen_alloc_exit(ctx);
-}
-
 static inline int clear_mem(struct pt_regs *ctx)
 {
         u64 pid_tgid = bpf_get_current_pid_tgid();
@@ -235,49 +146,55 @@ static inline int clear_mem(struct pt_regs *ctx)
 
         return 0;
 }
+
+TRACEPOINT_PROBE(kmem, kmalloc) {
+        gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
+        return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+}
+
+TRACEPOINT_PROBE(kmem, kmalloc_node) {
+        gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
+        return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+}
+
+TRACEPOINT_PROBE(kmem, kfree) {
+        return gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
+}
+
+TRACEPOINT_PROBE(kmem, kmem_cache_alloc) {
+        gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
+        return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+}
+
+TRACEPOINT_PROBE(kmem, kmem_cache_alloc_node) {
+        gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
+        return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+}
+
+TRACEPOINT_PROBE(kmem, kmem_cache_free) {
+        return gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
+}
+
+TRACEPOINT_PROBE(kmem, mm_page_alloc) {
+        gen_alloc_enter((struct pt_regs *)args, PAGE_SIZE << args->order);
+        return gen_alloc_exit2((struct pt_regs *)args, args->pfn);
+}
+
+TRACEPOINT_PROBE(kmem, mm_page_free) {
+        return gen_free_enter((struct pt_regs *)args, (void *)args->pfn);
+}
 """
 
-pid_max=0
 
 def mem_print_header(output_file):
         output_file.write("%s,%s,%s\n" %("TIME", "SIZE(B)", "NUM"))
 
 def mem_attach_probe(bpf_obj):
-        obj='c'
-        def attach_probes(sym, fn_prefix=None, can_fail=False):
-                        if fn_prefix is None:
-                                fn_prefix = sym
-
-                        try:
-                                bpf_obj.attach_uprobe(name=obj, sym=sym,
-                                        fn_name=fn_prefix + "_enter")
-                                bpf_obj.attach_uretprobe(name=obj, sym=sym,
-                                                fn_name=fn_prefix + "_exit")
-                        except Exception:
-                                if can_fail:
-                                        return
-                                else:
-                                        raise
-
-        # 用户态下监控需要监控下面这些关于内存申请与释放的函数
-        attach_probes("malloc")
-        attach_probes("calloc")
-        attach_probes("realloc")
-        attach_probes("posix_memalign")
-        attach_probes("valloc", can_fail=True) # failed on Android, is deprecated in libc.so from bionic directory
-        attach_probes("memalign")
-        attach_probes("pvalloc", can_fail=True) # failed on Android, is deprecated in libc.so from bionic directory
-        attach_probes("aligned_alloc", can_fail=True)  # added in C11
-        # 挂载free函数释放内存
-        bpf_obj.attach_uprobe(name=obj, sym="free", fn_name="free_enter")
-        # bpf_obj.attach_tracepoint("syscalls:sys_enter_kill", "clear_mem")
-
-        # test uprobe
-        # bpf_obj.attach_uprobe(name="./mem_example/main", sym_re="func3", fn_name="uprobe_output")
-        # bpf_obj.attach_uretprobe(name="./mem_example/main", sym_re="func3", fn_name="uretprobe_output")
+        return
 
 def mem_generate_prg(prg, configure):
         with open("/proc/sys/kernel/pid_max", "r") as f:
+                global pid_max
                 pid_max = int(f.read().strip())
         if configure["show_all_threads"] == True:
                 prg += mem_prg.replace("PID_MAX", str(pid_max)).replace("PID", "pid")
