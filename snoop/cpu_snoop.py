@@ -111,7 +111,7 @@ BAIL:
 }
 
 // 挂载到内核进程退出函数
-static inline  clear_proc_time(struct pt_regs *ctx)
+static inline int clear_proc_time(struct pt_regs *ctx)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 tgid = pid_tgid >> 32, pid = pid_tgid;
@@ -123,7 +123,10 @@ static inline  clear_proc_time(struct pt_regs *ctx)
     return 0;
 }
 """
-
+def cpu_generate_prg(prg, configure):
+    prg += cpu_prg
+    return prg
+    
 def cpu_bcc_print_header(output_file):
     output_file.write("%s,%s,%s,%s,%s,%s\n" %("TIME", "PID", "COMM", "ON CPU", "OFF CPU", "CPU%"))
 
