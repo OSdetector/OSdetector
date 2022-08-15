@@ -121,7 +121,7 @@ static inline int gen_free_enter(struct pt_regs *ctx, void *address) {
                 bpf_trace_printk("Warning: Try to free an memory block that doesn't belong to the process, tgid:%d, pid:%d, addr:%x\\n", tgid, pid, (int)address);
                 struct combined_alloc_info_t cinfo = {
                         .total_size = PID,
-                        .number_of_allocs = (u64)address
+                        .number_of_allocs = addr
                 };
                 u32 tgid = PID_MAX+1;
                 combined_allocs.update(&tgid, &cinfo);
@@ -250,7 +250,7 @@ static inline int clear_mem(struct pt_regs *ctx)
 
 
 def mem_print_header(output_file):
-        output_file.write("%s,%s,%s\n" %("TIME", "SIZE(B)", "NUM"))
+        output_file.write("%s,%s,%s,%s\n" %("TIME", "PID", "SIZE(B)", "NUM"))
 
 def mem_attach_probe(bpf_obj):
         obj='c'

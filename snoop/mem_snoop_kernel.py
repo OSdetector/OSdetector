@@ -198,7 +198,7 @@ TRACEPOINT_PROBE(kmem, mm_page_free) {
 
 
 def mem_print_header(output_file):
-        output_file.write("%s,%s,%s\n" %("TIME", "SIZE(B)", "NUM"))
+        output_file.write("%s,%s,%s,%s\n" %("TIME", "PID", "SIZE(B)", "NUM"))
 
 def mem_attach_probe(bpf_obj):
         return
