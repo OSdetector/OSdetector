@@ -16,8 +16,8 @@ struct TRACEE_NAME_return_msg_data_t{
     RETURN_DATA_FIELD
 };
 
-BPF_QUEUE(TRACEE_NAME_enter_msg_queue, struct TRACEE_NAME_enter_msg_data_t, 1024);
-BPF_QUEUE(TRACEE_NAME_return_msg_queue, struct TRACEE_NAME_return_msg_data_t, 1024);
+BPF_QUEUE(TRACEE_NAME_enter_msg_queue, struct TRACEE_NAME_enter_msg_data_t, 10240);
+BPF_QUEUE(TRACEE_NAME_return_msg_queue, struct TRACEE_NAME_return_msg_data_t, 10240);
 
 int TRACEE_NAME_enter(struct pt_regs* ctx)
 {
@@ -83,6 +83,8 @@ aliases_indarg = {
 }
 
 def tracer_generate_prg(prg, configure):
+    global delta
+    delta = get_delta()
     trace_config = configure['trace']
     for tracee, enter_msg_format, return_msg_format in zip(trace_config['tracee_name'], trace_config['enter_msg_format'], trace_config['return_msg_format']):
         if not configure['trace']['spid'] is None:
@@ -138,7 +140,6 @@ def trace_attach_probe(bpf_obj, configure):
 
 
 def trace_record(output_file, bpf_obj, configure):
-    delta = get_delta()
     trace_config = configure['trace']
     msg_list = []
     # 遍历所有trace点，收集各个队列的消息

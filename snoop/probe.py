@@ -137,7 +137,7 @@ def uprobe_record(output_file, bpf_obj):
                     data.number_of_allocs,
                     #  unit: ms
                     data.utime * 1e-4 /
-                    HZ,  # FIXME:Magic Num: It seems that 1 Jiffies = 1e7 * CPU_TIME
+                    HZ,  # Hint:Magic Num: 1 Jiffies = 1e7 * CPU_TIME
                     data.stime * 1e-4 / HZ,
                     data.nvcsw,
                     data.nivcsw,

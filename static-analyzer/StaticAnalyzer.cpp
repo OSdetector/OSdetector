@@ -143,7 +143,7 @@ int main(int argc, const char **argv) {
   struct result res = readFile("./target_func");
   for(int i = 0; i < res.cnt; i++)
   {
-    ToolTemplateCallback* Callback = new ToolTemplateCallback(*Executor->get()->getExecutionContext(), res.type_list[i]); // FIXME:具有内存泄露问题
+    ToolTemplateCallback* Callback = new ToolTemplateCallback(*Executor->get()->getExecutionContext(), res.type_list[i]); 
     for(std::string func_name : res.func_name[i])
     {
         if(func_name=="\0")

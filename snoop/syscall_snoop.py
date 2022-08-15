@@ -132,7 +132,7 @@ def syscall_record(output_file, bpf_obj):
             info = message_queue.pop()
             # print(type(info.type), type(info.comm))
             ts = info.ts*1e-9+delta
-            output_file.write("%f,%16s,%-6d,%d,%d,%d\n" % (ts, info.comm, info.pid, info.type, info.syscall_id, info.parm1))
+            output_file.write("%f,%16s,%-6d,%d,%d,%d\n" % (ts, info.comm, info.pid, info.type, info.syscall_id, info.parm1 if info.type==1 else info.ret))
         except KeyError:
             break
     output_file.flush()

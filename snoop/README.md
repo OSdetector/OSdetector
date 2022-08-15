@@ -48,12 +48,12 @@
         "return_msg_format":["Return search"]			# 函数返回时输出的消息，支持的参数为retval
 	"spid":10000					# 对某个特定线程进行监控，spid为线程id，填入null表示不启用
     },
-    "snoop_network": "bcc", 				# 进程网络流量监控模块，可选项为("bcc", null)
+    "snoop_network": "bcc_user", 			# 进程网络流量监控模块，可选项为("bcc_user", "bcc_kernel", null)
     "network_output_file": "net.csv", 			# 进程流量监控输出文件名
     "snoop_syscall": "None", 				# 系统占用监控模块，可选项为("bcc", null)
     "syscall_output_file": "syscall.csv",		# 进程系统调用输出文件名
     "interval": 5,  					# 监控周期，单位秒
-    "trace_multiprocess":  true 			# 是否跟踪并监控进程产生的子进程（对系统调用监控输出会破坏原有顺序）
+    "trace_multiprocess":  true, 			# 是否跟踪并监控进程产生的子进程（对系统调用监控输出会破坏原有顺序）
     "show_all_threads": true				# 是否分别展示每个线程，设定为true输出文件中的PID属性改为SPID（线程号）
 }
 ```
@@ -109,7 +109,7 @@
 
 进程内存占用监控模块。
 
-在用户态内存分配释放相关的函数处插桩以统计内存的申请与释放。
+目前分别在标准库函数与内核中进行插桩记录。
 
 前端定期唤醒并从eBPF虚拟中获取监控进程当前仍未释放的内存栈数量与内存占用大小。
 
