@@ -10,13 +10,12 @@ def func(dir):
     for i in range(5):
         print("deleting file %d" % i)
         os.system("rm %s/%d" % (dir, i))
-    # sleep(1000)/
+    sleep(1000)
 
-# while True:
-#     os.system("sync")
+
 
 if __name__=="__main__":
-    loc = "/path/to/store/some/trash"
+    loc = "/path/to/store/trashbin"
     procs = []
     for i in range(10):
         p = multiprocessing.Process(target=func, args=(loc+str(i), ))
